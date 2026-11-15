@@ -259,6 +259,15 @@ final class PlayerModel: ObservableObject {
         return dev.supports(rate: activeOutputRate(for: info))
     }
 
+    /// 需要提示用户的信息（设备不兼容 / 错误），nil 表示一切正常
+    var warningText: String? {
+        if !statusMessage.isEmpty { return statusMessage }
+        if !deviceSupportsCarrier {
+            return "This device may not support the required DoP carrier rate"
+        }
+        return nil
+    }
+
     func activeOutputRate(for info: DSDInfo) -> Double {
         outputMode == .dop ? info.dopCarrierRate : Double(info.dsdSampleRate) / 32
     }
@@ -469,7 +478,6 @@ struct Theme {
     let bgBottom: Color
     let accent: Color
     let badgeBg: Color
-    let statusBarBg: Color
     let isDark: Bool
     let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
     let dotGrid: Bool           // 面板点阵纹理（博朗风格）
@@ -498,7 +506,6 @@ enum Skin: Int, CaseIterable, Identifiable {
                 bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
                 accent: Color(red: 0.93, green: 0.68, blue: 0.30),
                 badgeBg: Color.white.opacity(0.08),
-                statusBarBg: Color.black.opacity(0.25),
                 isDark: true,
                 physicalButtons: false,
                 dotGrid: false)
@@ -509,7 +516,6 @@ enum Skin: Int, CaseIterable, Identifiable {
                 bgBottom: Color(red: 0.878, green: 0.867, blue: 0.831),
                 accent: Color(red: 0.875, green: 0.33, blue: 0.12),
                 badgeBg: Color.black.opacity(0.07),
-                statusBarBg: Color.black.opacity(0.06),
                 isDark: false,
                 physicalButtons: true,
                 dotGrid: true)
@@ -520,7 +526,6 @@ enum Skin: Int, CaseIterable, Identifiable {
                 bgBottom: Color(red: 0.02, green: 0.04, blue: 0.03),
                 accent: Color(red: 0.24, green: 0.94, blue: 0.45),
                 badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
-                statusBarBg: Color.black.opacity(0.3),
                 isDark: true,
                 physicalButtons: false,
                 dotGrid: false)
@@ -554,9 +559,6 @@ struct ContentView: View {
                 Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 playlistView
             }
-            if hasStatusContent {
-                statusBar
-            }
         }
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
         .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
@@ -576,10 +578,6 @@ struct ContentView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
         .background(WindowConfigurator())   // 标题栏完全透明
-    }
-
-    private var hasStatusContent: Bool {
-        !model.statusMessage.isEmpty || !model.deviceSupportsCarrier
     }
 
     private var faceplateBackground: some View {
@@ -654,6 +652,13 @@ struct ContentView: View {
             .frame(width: 130)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
+            // 告警图标：设备不兼容或出错时显示，悬停查看详情
+            if let warning = model.warningText {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(warning)
+                    .holeFreeZone()
+            }
             Picker("", selection: $model.selectedDevice) {
                 ForEach(model.devices) { dev in
                     Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
@@ -907,26 +912,6 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { selection = [item.id] }
-    }
-
-    private var statusBar: some View {
-        HStack {
-            if !model.statusMessage.isEmpty {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text(model.statusMessage)
-                    .foregroundStyle(.orange)
-            } else if !model.deviceSupportsCarrier {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                Text("This device may not support the required DoP carrier rate")
-                    .foregroundStyle(.orange)
-            }
-            Spacer()
-        }
-        .font(.caption)
-        .padding(.horizontal, 16).padding(.vertical, 6)
-        .background(theme.statusBarBg)
     }
 
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false) -> some View {
