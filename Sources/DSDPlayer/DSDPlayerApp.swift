@@ -1023,7 +1023,7 @@ struct VUMeter: View {
             HStack(spacing: 1.5) {
                 ForEach(0..<segments, id: \.self) { i in
                     let fromCenter = Double(segments - 1 - i) / Double(segments)  // 0=靠中间
-                    segment(lit: fromCenter < left, pos: fromCenter)
+                    segment(lit: fromCenter < norm(left), pos: fromCenter)
                 }
             }
             // 中央指示灯：播放时亮起
@@ -1036,11 +1036,17 @@ struct VUMeter: View {
             HStack(spacing: 1.5) {
                 ForEach(0..<segments, id: \.self) { i in
                     let fromCenter = Double(i) / Double(segments)
-                    segment(lit: fromCenter < right, pos: fromCenter)
+                    segment(lit: fromCenter < norm(right), pos: fromCenter)
                 }
             }
         }
         .frame(height: 13)
+    }
+
+    /// 线性 RMS 幅度 → 对数尺度：-60dB 映射到 0，0dB 映射到 1
+    private func norm(_ level: Double) -> Double {
+        let db = 20 * log10(max(level, 1e-6))
+        return max(0, (db + 60) / 60)
     }
 
     private func segment(lit: Bool, pos: Double) -> some View {
