@@ -697,7 +697,7 @@ struct ContentView: View {
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
-        .padding(.top, 28)   // 面板延伸进标题栏后，内容避开红绿灯区域
+        .padding(.top, 50)   // 面板延伸进标题栏后，顶栏上方留出一整行冲孔
         .padding(.bottom, 12)
     }
 
