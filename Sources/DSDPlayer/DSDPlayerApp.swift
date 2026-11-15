@@ -629,14 +629,9 @@ struct ContentView: View {
                     .foregroundStyle(theme.accent)
                 Text("DSD Player")
                     .font(.headline)
-                Text("DoP Bit-Perfect")
-                    .font(.caption)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(theme.accent.opacity(0.18))
-                    .foregroundStyle(theme.accent)
-                    .clipShape(Capsule())
             }
             .holeFreeZone()
+            .padding(.leading, 64)   // 避开隐藏标题栏后的红绿灯按钮
             Spacer()
             Picker("", selection: Binding(
                 get: { model.outputMode },
@@ -1075,6 +1070,7 @@ struct DSDPlayerApp: App {
             ContentView()
                 .environmentObject(model)
         }
+        .windowStyle(.hiddenTitleBar)   // 内容延伸到标题栏，面板浑然一体
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
