@@ -539,15 +539,15 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上部面板（博朗皮肤带冲孔纹理，避开控件区域）
+            // 上部面板（博朗皮肤的冲孔画在面板背景上，向上延伸 28pt 覆盖标题栏）
             VStack(spacing: 0) {
                 header
                 nowPlaying
                 transport
             }
             .coordinateSpace(name: "faceplate")
-            .background(faceplateBackground)
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
+            .background(faceplateBackground)
             if model.showPlaylist {
                 Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 playlistView
@@ -556,8 +556,9 @@ struct ContentView: View {
                 statusBar
             }
         }
-        // 底色：收起列表时用面板色（延伸区无缝），展开时用列表底色
-        .background(model.showPlaylist ? theme.bgBottom : theme.bgTop)
+        // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
+        .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
+        .background(theme.bgBottom)   // 列表区/窗口底色
         // 隐藏按钮承载方向键快进退快捷键
         .background(
             HStack {
@@ -578,7 +579,7 @@ struct ContentView: View {
 
     private var faceplateBackground: some View {
         ZStack {
-            // 冲孔皮肤用纯色面板（避让补丁不可见）；其余皮肤用渐变
+            // 冲孔皮肤用纯色面板；其余皮肤用渐变
             if theme.dotGrid {
                 theme.bgTop
                 dotGridTexture
@@ -587,43 +588,41 @@ struct ContentView: View {
                                startPoint: .top, endPoint: .bottom)
             }
         }
+        .padding(.top, -28)   // 向上延伸覆盖标题栏（隐藏标题栏高 28pt）
     }
 
     /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
     /// 水平方向对称布局：左右边缘留白相等
     private var dotGridTexture: some View {
-        GeometryReader { geo in
-            // 背景向上延伸进标题栏安全区，面板的避让坐标系需要补偿这段偏移
-            let offsetY = geo.frame(in: .named("faceplate")).minY
-            Canvas { ctx, size in
-                let step: CGFloat = 15
-                let d: CGFloat = 12
-                let margin: CGFloat = 7   // 控件周围的无孔区
-                var zones = holeFreeRects.map {
-                    $0.insetBy(dx: -margin, dy: -margin).offsetBy(dx: 0, dy: -offsetY)
-                }
-                zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域不画孔
-                // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
-                let count = Int((size.width - 2 * step + (step - d)) / step)
-                let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-                var y: CGFloat = step
-                // 底部同样保留 step 余量：只画完整可见的行（含下缘高光）
-                while y + d + 3.5 <= size.height - step {
-                    var x: CGFloat = startX
-                    for _ in 0..<count {
-                        let hole = CGRect(x: x, y: y, width: d, height: d)
-                        if !zones.contains(where: { $0.intersects(hole) }) {
-                            // 下缘高光（先画，被孔遮住上半部分，露出下缘）
-                            ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
-                                     with: .color(.white.opacity(0.55)))
-                            // 孔体
-                            ctx.fill(Path(ellipseIn: hole),
-                                     with: .color(.black.opacity(0.18)))
-                        }
-                        x += step
+        Canvas { ctx, size in
+            let step: CGFloat = 15
+            let d: CGFloat = 12
+            let margin: CGFloat = 7   // 控件周围的无孔区
+            // 画布比面板高 28pt（向上延伸覆盖标题栏），控件坐标需 +28 补偿
+            var zones = holeFreeRects.map {
+                $0.insetBy(dx: -margin, dy: -margin).offsetBy(dx: 0, dy: 28)
+            }
+            zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域不画孔
+            // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
+            let count = Int((size.width - 2 * step + (step - d)) / step)
+            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
+            var y: CGFloat = step
+            // 底部保留 step 余量：只画完整可见的行（含下缘高光）
+            while y + d + 3.5 <= size.height - step {
+                var x: CGFloat = startX
+                for _ in 0..<count {
+                    let hole = CGRect(x: x, y: y, width: d, height: d)
+                    if !zones.contains(where: { $0.intersects(hole) }) {
+                        // 下缘高光（先画，被孔遮住上半部分，露出下缘）
+                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
+                                 with: .color(.white.opacity(0.55)))
+                        // 孔体
+                        ctx.fill(Path(ellipseIn: hole),
+                                 with: .color(.black.opacity(0.18)))
                     }
-                    y += step
+                    x += step
                 }
+                y += step
             }
         }
         .allowsHitTesting(false)
@@ -937,7 +936,7 @@ struct ContentView: View {
 
 // MARK: - 冲孔避让区域
 
-/// 收集面板控件的 frame，点阵绘制时避开这些区域
+/// 收集面板控件的 frame，冲孔绘制时避开这些区域（faceplate 坐标系）
 struct HoleFreeRectKey: PreferenceKey {
     static let defaultValue: [CGRect] = []
     static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
