@@ -57,12 +57,12 @@ func estimateLevelsDoP(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -
     guard framesPerCh > 0 else { return (0, 0) }
     func level(_ sum: Int) -> Double {
         let density = Double(sum) / Double(framesPerCh * 16)
-        return min(1.0, abs(density - 0.5) * 2 * 1.414)
+        return min(1.0, abs(density - 0.5) * 2 * 2.2)  // RMS→峰值 + 表头增益
     }
     return (level(sum0), channels == 2 ? level(sum1) : level(sum0))
 }
 
-/// 从 Int32 PCM 采样估计左右声道 RMS 电平（0...1，√2 补偿）。
+/// 从 Int32 PCM 采样估计左右声道 RMS 电平（0...1，增益补偿）。
 func estimateLevelsPCM(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -> (Double, Double) {
     var sumSq0 = 0.0, sumSq1 = 0.0
     for i in 0..<count {
@@ -72,7 +72,7 @@ func estimateLevelsPCM(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -
     let framesPerCh = channels == 2 ? count / 2 : count
     guard framesPerCh > 0 else { return (0, 0) }
     func level(_ sumSq: Double) -> Double {
-        min(1.0, (sumSq / Double(framesPerCh)).squareRoot() * 1.414)
+        min(1.0, (sumSq / Double(framesPerCh)).squareRoot() * 2.0)
     }
     return (level(sumSq0), channels == 2 ? level(sumSq1) : level(sumSq0))
 }

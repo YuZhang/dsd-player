@@ -216,11 +216,11 @@ final class DSDPlayerTests: XCTestCase {
         }
         XCTAssertEqual(zl, 0)
 
-        let full = [Int32](repeating: Int32.max / 2, count: 512)  // RMS 0.5 → 0.707
+        let full = [Int32](repeating: Int32.max / 2, count: 512)  // RMS 0.5 × 增益 2.0 → 满格
         let (fl, _) = full.withUnsafeBufferPointer {
             estimateLevelsPCM($0.baseAddress!, count: 512, channels: 2)
         }
-        XCTAssertEqual(fl, 0.707, accuracy: 0.02)
+        XCTAssertEqual(fl, 1.0, accuracy: 0.01)
     }
 
     // MARK: - 皮肤与持久化

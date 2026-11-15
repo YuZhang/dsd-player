@@ -78,6 +78,7 @@ final class PlayerModel: ObservableObject {
 
     let engine = PlaybackEngine()
     private var timer: Timer?
+    private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
 
     // MARK: 持久化
@@ -150,25 +151,30 @@ final class PlayerModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        // VU 电平表独立 30Hz 刷新，保证动画流畅
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.meterTick() }
+        }
         setupRemoteCommands()
         restore()
     }
 
     private func tick() {
-        guard state == .playing || state == .paused else {
-            meterL *= 0.8; meterR *= 0.8   // 停止时电平衰减归零
-            return
-        }
+        guard state == .playing || state == .paused else { return }
         position = engine.positionSeconds
         updateNowPlaying()
-        // VU 表：读取引擎电平，快攻慢放
-        let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
-        let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
+    }
+
+    private func meterTick() {
         if state == .playing {
-            meterL = max(l, meterL * 0.7)
-            meterR = max(r, meterR * 0.7)
+            let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
+            let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
+            // 快攻慢放（模拟表针动态）
+            meterL = max(l, meterL * 0.82)
+            meterR = max(r, meterR * 0.82)
         } else {
-            meterL *= 0.8; meterR *= 0.8
+            meterL *= 0.9
+            meterR *= 0.9
         }
     }
 
@@ -563,13 +569,13 @@ struct ContentView: View {
     /// 博朗风格细点阵纹理
     private var dotGridTexture: some View {
         Canvas { ctx, size in
-            let step: CGFloat = 13
+            let step: CGFloat = 11
             var y: CGFloat = step
             while y < size.height {
                 var x: CGFloat = step
                 while x < size.width {
-                    ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.3, height: 1.3)),
-                             with: .color(.black.opacity(0.045)))
+                    ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.8, height: 1.8)),
+                             with: .color(.black.opacity(0.11)))
                     x += step
                 }
                 y += step
@@ -881,7 +887,7 @@ struct VUMeter: View {
     let left: Double    // 0...1
     let right: Double
     let theme: Theme
-    private let segments = 32
+    private let segments = 56
 
     var body: some View {
         VStack(spacing: 3) {
@@ -891,13 +897,13 @@ struct VUMeter: View {
     }
 
     private func row(_ level: Double) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 1.5) {
             ForEach(0..<segments, id: \.self) { i in
                 let pos = Double(i) / Double(segments)
                 RoundedRectangle(cornerRadius: 1)
                     .fill(pos < level ? segmentColor(pos) : theme.badgeBg)
                     .frame(maxWidth: .infinity)
-                    .frame(height: 5)
+                    .frame(height: 6)
             }
         }
     }
