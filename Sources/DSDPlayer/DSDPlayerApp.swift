@@ -170,10 +170,10 @@ final class PlayerModel: ObservableObject {
             let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
             let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
             // 快攻慢放（模拟表针动态）
-            meterL = max(l, meterL * 0.82)
-            meterR = max(r, meterR * 0.82)
+            meterL = max(l, meterL * 0.87)
+            meterR = max(r, meterR * 0.87)
         } else {
-            meterL *= 0.9
+            meterL *= 0.92
             meterR *= 0.9
         }
     }
@@ -566,16 +566,22 @@ struct ContentView: View {
         }
     }
 
-    /// 博朗风格细点阵纹理
+    /// 博朗风格冲孔纹理：深色圆孔 + 下缘高光模拟冲压斜面（光源从上方）
     private var dotGridTexture: some View {
         Canvas { ctx, size in
-            let step: CGFloat = 11
+            let step: CGFloat = 13
+            let d: CGFloat = 2.8
             var y: CGFloat = step
             while y < size.height {
                 var x: CGFloat = step
                 while x < size.width {
-                    ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.8, height: 1.8)),
-                             with: .color(.black.opacity(0.11)))
+                    let hole = CGRect(x: x, y: y, width: d, height: d)
+                    // 下缘高光（先画，被孔遮住上半部分，露出下缘）
+                    ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 1.0)),
+                             with: .color(.white.opacity(0.55)))
+                    // 孔体
+                    ctx.fill(Path(ellipseIn: hole),
+                             with: .color(.black.opacity(0.16)))
                     x += step
                 }
                 y += step
