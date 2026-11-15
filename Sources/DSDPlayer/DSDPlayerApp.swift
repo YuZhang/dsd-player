@@ -568,6 +568,7 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
+        .ignoresSafeArea()   // 内容画进标题栏安全区，消除顶部异色条带
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
@@ -950,18 +951,26 @@ extension View {
 
 // MARK: - 窗口配置
 
-/// 让标题栏完全透明，面板内容铺满整个窗口（含标题栏区域）
+/// 让标题栏完全透明且内容铺满整个窗口（含标题栏区域），面板任意处可拖动。
+/// SwiftUI 会在视图更新时重置窗口属性，所以在 updateNSView 里反复应用。
 private struct WindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
+    final class View: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            applySettings()
+        }
+        func applySettings() {
+            guard let window else { return }
+            window.styleMask.insert(.fullSizeContentView)   // 内容区扩展到标题栏
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true       // 面板空白处即可拖动窗口
         }
-        return view
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func makeNSView(context: Context) -> View { View() }
+    func updateNSView(_ nsView: View, context: Context) {
+        nsView.applySettings()   // 每次 SwiftUI 更新都重新应用，防止被重置
+    }
 }
 
 // MARK: - 滚动文本（超长歌名往返滚动）
