@@ -592,6 +592,8 @@ struct ContentView: View {
             let offsetY = geo.frame(in: .named("faceplate")).minY
             Canvas { ctx, size in
                 ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.bgTop))
+                // 只在紧凑布局（收起播放列表）时绘制冲孔
+                guard !model.showPlaylist else { return }
                 // 冲孔：深色孔 + 下缘高光；水平对称；避开控件与红绿灯区域
                 let step: CGFloat = 15
                 let d: CGFloat = 12
