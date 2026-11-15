@@ -808,7 +808,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(.top, 6)
-        .padding(.bottom, 54)   // 播放按钮下方完整露出 3 行冲孔
+        .padding(.bottom, 30)   // 播放按钮下方 1 行冲孔 + 正常边距
     }
 
     private func transportButton(_ icon: String, size: CGFloat, active: Bool = false,
