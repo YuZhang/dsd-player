@@ -560,7 +560,9 @@ struct ContentView: View {
         }
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
         .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
-        .background(theme.bgBottom)   // 列表区/窗口底色
+        // 外层同样延伸到顶部：让底色覆盖窗口全部区域（含延伸产生的底部 28pt）
+        .ignoresSafeArea(.container, edges: .top)
+        .background(model.showPlaylist ? theme.bgBottom : theme.bgTop, ignoresSafeAreaEdges: .all)
         // 隐藏按钮承载方向键快进退快捷键
         .background(
             HStack {
