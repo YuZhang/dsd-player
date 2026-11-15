@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""生成 DSD64 测试音源: 440Hz 正弦波, 立体声, 10 秒, DSF 格式 (LSB-first, 4096 字节块)。"""
+"""生成 DSD 测试音源: 二阶 sigma-delta 调制, 立体声 (左 440Hz / 右 880Hz), DSF 格式。
+用法: python3 make_test_tone.py <输出.dsf> [DSD倍数 64/128/256] [秒数]"""
 import struct, math, sys
 
-RATE = 2_822_400
-SECONDS = 10
-BLOCK = 4096
 OUT = sys.argv[1] if len(sys.argv) > 1 else "test_tone_dsd64.dsf"
+MULT = int(sys.argv[2]) if len(sys.argv) > 2 else 64
+SECONDS = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+RATE = 44100 * MULT
+BLOCK = 4096
 
 def sigma_delta(freq, amp, seconds):
     """二阶 sigma-delta 调制 (噪声整形到超声段), 输出 0/1 比特"""
@@ -37,11 +39,10 @@ def channel_data(freq, amp):
 
 left = channel_data(440.0, 0.5)
 right = channel_data(880.0, 0.35)   # 右声道 880Hz, 便于分辨声道
-total = len(left)
 
 # 块交错: [块0 L][块0 R][块1 L][块1 R]...
 payload = bytearray()
-for off in range(0, total, BLOCK):
+for off in range(0, len(left), BLOCK):
     payload += left[off:off + BLOCK]
     payload += right[off:off + BLOCK]
 
@@ -54,4 +55,4 @@ dsd_chunk = b"DSD " + struct.pack("<QQQ", 28, file_size, 0)
 
 with open(OUT, "wb") as f:
     f.write(dsd_chunk + fmt_chunk + data_chunk)
-print(f"已生成 {OUT}: DSD64 立体声 {SECONDS}s, 左 440Hz / 右 880Hz, {file_size/1e6:.1f} MB")
+print(f"已生成 {OUT}: DSD{MULT} 立体声 {SECONDS}s, 左 440Hz / 右 880Hz, {file_size/1e6:.1f} MB")
