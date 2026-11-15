@@ -697,7 +697,7 @@ struct ContentView: View {
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
-        .padding(.top, 50)   // 面板延伸进标题栏后，顶栏上方留出一整行冲孔
+        .padding(.top, 35)   // 面板延伸进标题栏；顶栏上方恰好一行冲孔（y=15）
         .padding(.bottom, 12)
     }
 
