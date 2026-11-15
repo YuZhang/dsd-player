@@ -539,7 +539,8 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上部面板（博朗皮肤的冲孔画在面板背景上，向上延伸 28pt 覆盖标题栏）
+            // 上部面板（博朗皮肤的冲孔画在面板背景上）
+            // 面板自身延伸进标题栏安全区：单一画布无接缝
             VStack(spacing: 0) {
                 header
                 nowPlaying
@@ -548,6 +549,7 @@ struct ContentView: View {
             .coordinateSpace(name: "faceplate")
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
             .background(faceplateBackground)
+            .ignoresSafeArea(.container, edges: .top)
             if model.showPlaylist {
                 Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 playlistView
@@ -571,40 +573,7 @@ struct ContentView: View {
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
-        // 标题栏冲孔条：仅这层延伸进标题栏，不影响主内容布局与窗口尺寸
-        .overlay(alignment: .top) {
-            if theme.dotGrid {
-                titlebarHoles
-                    .frame(height: 28)
-                    .ignoresSafeArea(.container, edges: .top)
-                    .allowsHitTesting(false)
-            }
-        }
         .background(WindowConfigurator())   // 标题栏完全透明
-    }
-
-    /// 标题栏区域的冲孔条（仅博朗皮肤），与面板网格对齐
-    private var titlebarHoles: some View {
-        Canvas { ctx, size in
-            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.bgTop))
-            let step: CGFloat = 15
-            let d: CGFloat = 12
-            let count = Int((size.width - 2 * step + (step - d)) / step)
-            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-            let lightZone = CGRect(x: 0, y: 0, width: 78, height: 34)
-            var x = startX
-            for _ in 0..<count {
-                // 与面板网格对齐：面板首行 = 面板顶+15，面板顶 = 标题栏底
-                let hole = CGRect(x: x, y: 15, width: d, height: d)
-                if !lightZone.intersects(hole) {
-                    ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
-                             with: .color(.white.opacity(0.55)))
-                    ctx.fill(Path(ellipseIn: hole),
-                             with: .color(.black.opacity(0.18)))
-                }
-                x += step
-            }
-        }
     }
 
     private var hasStatusContent: Bool {
@@ -638,8 +607,7 @@ struct ContentView: View {
             // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
             let count = Int((size.width - 2 * step + (step - d)) / step)
             let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-            // 标题栏条带的孔在窗口 y=15；面板从 28pt 开始，首行取 2 使网格连续（15、30、45…）
-            var y: CGFloat = 2
+            var y: CGFloat = step
             // 底部保留 step 余量：只画完整可见的行（含下缘高光）
             while y + d + 3.5 <= size.height - step {
                 var x: CGFloat = startX
@@ -720,7 +688,9 @@ struct ContentView: View {
             }
             .holeFreeZone()
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 28)   // 面板延伸进标题栏后，内容避开红绿灯区域
+        .padding(.bottom, 12)
     }
 
     // 当前曲目信息
