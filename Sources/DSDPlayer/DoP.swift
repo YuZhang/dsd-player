@@ -44,22 +44,32 @@ struct DoPEncoder {
 }
 
 /// 从 DoP 帧估计左右声道电平（0...1）。
-/// 原理：1-bit DSD 流的局部比特密度相对 0.5 的偏移即瞬时幅度；乘以 √2 做 RMS→峰值补偿。
+/// 原理：1-bit DSD 流每字节（8 bit ≈ 2.8µs）的比特密度偏移即瞬时幅度；
+/// 对瞬时幅度取窗口内均方根（RMS），再施加表头增益。
+/// （不能对整个窗口直接算密度——中高频会在窗口内正负抵消导致读数趋零）
 func estimateLevelsDoP(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -> (Double, Double) {
-    var sum0 = 0, sum1 = 0
+    var sumSq0 = 0.0, sumSq1 = 0.0
+    var bytes0 = 0, bytes1 = 0
     for i in 0..<count {
         let w = UInt32(bitPattern: ptr[i])
-        let bits = (UInt8(truncatingIfNeeded: w >> 16)).nonzeroBitCount
-                 + (UInt8(truncatingIfNeeded: w >> 8)).nonzeroBitCount
-        if channels == 2, i & 1 == 1 { sum1 += bits } else { sum0 += bits }
+        // 每帧 2 个载荷字节，逐字节取密度偏移的平方
+        let b0 = (UInt8(truncatingIfNeeded: w >> 16)).nonzeroBitCount
+        let b1 = (UInt8(truncatingIfNeeded: w >> 8)).nonzeroBitCount
+        let d0 = Double(b0 - 4) / 4.0   // ∈ [-1, 1]，瞬时幅度
+        let d1 = Double(b1 - 4) / 4.0
+        if channels == 2, i & 1 == 1 {
+            sumSq1 += d0 * d0 + d1 * d1
+            bytes1 += 2
+        } else {
+            sumSq0 += d0 * d0 + d1 * d1
+            bytes0 += 2
+        }
     }
-    let framesPerCh = channels == 2 ? count / 2 : count
-    guard framesPerCh > 0 else { return (0, 0) }
-    func level(_ sum: Int) -> Double {
-        let density = Double(sum) / Double(framesPerCh * 16)
-        return min(1.0, abs(density - 0.5) * 2 * 2.2)  // RMS→峰值 + 表头增益
+    guard bytes0 > 0 else { return (0, 0) }
+    func level(_ sumSq: Double, _ n: Int) -> Double {
+        min(1.0, (sumSq / Double(n)).squareRoot() * 1.5)  // RMS × 1.5 增益
     }
-    return (level(sum0), channels == 2 ? level(sum1) : level(sum0))
+    return (level(sumSq0, bytes0), channels == 2 ? level(sumSq1, bytes1) : level(sumSq0, bytes0))
 }
 
 /// 从 Int32 PCM 采样估计左右声道 RMS 电平（0...1，增益补偿）。
