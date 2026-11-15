@@ -518,7 +518,7 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.black.opacity(0.07),
                 isDark: false,
                 physicalButtons: true,
-                dotGrid: true)
+                dotGrid: false)
         case .terminal:
             // 绿磷光终端
             return Theme(
