@@ -543,43 +543,45 @@ struct ContentView: View {
     private var theme: Theme { model.skin.theme }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // 上部面板：正文正常布局，不做任何手动补偿
+        ZStack(alignment: .top) {
+            // 整个窗口（含标题栏）共用同一背景：与面板同一个颜色来源
+            Group {
+                if theme.dotGrid {
+                    holeCanvas
+                } else {
+                    theme.bgTop
+                }
+            }
+            .ignoresSafeArea(.container, edges: .top)   // 只有背景进入安全区
+
+            // 正文：正常布局，不做任何手动补偿
             VStack(spacing: 0) {
-                header
-                nowPlaying
-                transport
+                VStack(spacing: 0) {
+                    header
+                    nowPlaying
+                    transport
+                }
+                .coordinateSpace(name: "faceplate")
+                .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
+                .background(faceplateBackground)
+                if model.showPlaylist {
+                    Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                    playlistView
+                        .background(theme.bgBottom)   // 不透明盖住冲孔
+                }
             }
-            .coordinateSpace(name: "faceplate")
-            .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
-            .background(faceplateBackground)
-            if model.showPlaylist {
-                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
-                playlistView
-                    .background(theme.bgBottom)   // 不透明盖住冲孔
-            }
+            // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
+            .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
+            // 隐藏按钮承载方向键快进退快捷键
+            .background(
+                HStack {
+                    Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
+                    Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
+                }
+                .opacity(0)
+                .frame(width: 0, height: 0)
+            )
         }
-        // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
-        .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
-        // 背景负责延伸进标题栏（仅背景忽略顶部安全区，正文保持正常布局）
-        // 标题栏区域与面板顶部同色：用 bgTop 而非 bgBottom
-        .background {
-            if theme.dotGrid {
-                holeCanvas
-                    .ignoresSafeArea(.container, edges: .top)
-            } else {
-                theme.bgTop
-            }
-        }
-        // 隐藏按钮承载方向键快进退快捷键
-        .background(
-            HStack {
-                Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
-                Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
-            }
-            .opacity(0)
-            .frame(width: 0, height: 0)
-        )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
