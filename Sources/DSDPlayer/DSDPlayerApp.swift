@@ -170,11 +170,11 @@ final class PlayerModel: ObservableObject {
             let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
             let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
             // 快攻慢放（模拟表针动态）
-            meterL = max(l, meterL * 0.87)
-            meterR = max(r, meterR * 0.87)
+            meterL = max(l, meterL * 0.91)
+            meterR = max(r, meterR * 0.91)
         } else {
-            meterL *= 0.92
-            meterR *= 0.9
+            meterL *= 0.94
+            meterR *= 0.92
         }
     }
 
@@ -527,19 +527,22 @@ enum Skin: Int, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
+    @State private var holeFreeRects: [CGRect] = []
 
     private var theme: Theme { model.skin.theme }
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上部面板（博朗皮肤带细点阵纹理）
+            // 上部面板（博朗皮肤带冲孔纹理，避开控件区域）
             VStack(spacing: 0) {
                 header
                 Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 nowPlaying
                 transport
             }
+            .coordinateSpace(name: "faceplate")
             .background(faceplateBackground)
+            .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
             Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
             playlistView
             statusBar
@@ -560,28 +563,37 @@ struct ContentView: View {
 
     private var faceplateBackground: some View {
         ZStack {
-            LinearGradient(colors: [theme.bgTop, theme.bgBottom],
-                           startPoint: .top, endPoint: .bottom)
-            if theme.dotGrid { dotGridTexture }
+            // 冲孔皮肤用纯色面板（避让补丁不可见）；其余皮肤用渐变
+            if theme.dotGrid {
+                theme.bgTop
+                dotGridTexture
+            } else {
+                LinearGradient(colors: [theme.bgTop, theme.bgBottom],
+                               startPoint: .top, endPoint: .bottom)
+            }
         }
     }
 
-    /// 博朗风格冲孔纹理：深色圆孔 + 下缘高光模拟冲压斜面（光源从上方）
+    /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
     private var dotGridTexture: some View {
         Canvas { ctx, size in
-            let step: CGFloat = 13
-            let d: CGFloat = 2.8
+            let step: CGFloat = 15
+            let d: CGFloat = 4.2
+            let margin: CGFloat = 7   // 控件周围的无孔区
+            let zones = holeFreeRects.map { $0.insetBy(dx: -margin, dy: -margin) }
             var y: CGFloat = step
             while y < size.height {
                 var x: CGFloat = step
                 while x < size.width {
                     let hole = CGRect(x: x, y: y, width: d, height: d)
-                    // 下缘高光（先画，被孔遮住上半部分，露出下缘）
-                    ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 1.0)),
-                             with: .color(.white.opacity(0.55)))
-                    // 孔体
-                    ctx.fill(Path(ellipseIn: hole),
-                             with: .color(.black.opacity(0.16)))
+                    if !zones.contains(where: { $0.intersects(hole) }) {
+                        // 下缘高光（先画，被孔遮住上半部分，露出下缘）
+                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 1.4)),
+                                 with: .color(.white.opacity(0.55)))
+                        // 孔体
+                        ctx.fill(Path(ellipseIn: hole),
+                                 with: .color(.black.opacity(0.18)))
+                    }
                     x += step
                 }
                 y += step
@@ -593,17 +605,20 @@ struct ContentView: View {
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
     private var header: some View {
         HStack {
-            Image(systemName: "waveform.circle.fill")
-                .font(.system(size: 22))
-                .foregroundStyle(theme.accent)
-            Text("DSD Player")
-                .font(.headline)
-            Text("DoP Bit-Perfect")
-                .font(.caption)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(theme.accent.opacity(0.18))
-                .foregroundStyle(theme.accent)
-                .clipShape(Capsule())
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(theme.accent)
+                Text("DSD Player")
+                    .font(.headline)
+                Text("DoP Bit-Perfect")
+                    .font(.caption)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(theme.accent.opacity(0.18))
+                    .foregroundStyle(theme.accent)
+                    .clipShape(Capsule())
+            }
+            .holeFreeZone()
             Spacer()
             Picker("", selection: Binding(
                 get: { model.outputMode },
@@ -615,6 +630,7 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .frame(width: 130)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
+            .holeFreeZone()
             Picker("", selection: $model.selectedDevice) {
                 ForEach(model.devices) { dev in
                     Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
@@ -622,30 +638,34 @@ struct ContentView: View {
             }
             .labelsHidden()
             .frame(maxWidth: 240)
-            Button { model.refreshDevices() } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh device list")
-            Menu {
-                ForEach(Skin.allCases) { skin in
-                    Button {
-                        model.skin = skin
-                    } label: {
-                        if skin == model.skin {
-                            Label(skin.name, systemImage: "checkmark")
-                        } else {
-                            Text(skin.name)
+            .holeFreeZone()
+            HStack(spacing: 12) {
+                Button { model.refreshDevices() } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh device list")
+                Menu {
+                    ForEach(Skin.allCases) { skin in
+                        Button {
+                            model.skin = skin
+                        } label: {
+                            if skin == model.skin {
+                                Label(skin.name, systemImage: "checkmark")
+                            } else {
+                                Text(skin.name)
+                            }
                         }
                     }
+                } label: {
+                    Image(systemName: "paintbrush")
                 }
-            } label: {
-                Image(systemName: "paintbrush")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 28)
+                .help("Skin")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 28)
-            .help("Skin")
+            .holeFreeZone()
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -657,6 +677,7 @@ struct ContentView: View {
                 .font(.title3.weight(.semibold))
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                .holeFreeZone()
 
             if let info = model.currentInfo {
                 HStack(spacing: 8) {
@@ -669,9 +690,11 @@ struct ContentView: View {
                           : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz",
                           highlight: true)
                 }
+                .holeFreeZone()
             } else {
                 Text("Add .dsf / .dff files to start playing")
                     .font(.caption).foregroundStyle(.secondary)
+                    .holeFreeZone()
             }
 
             // 进度
@@ -690,53 +713,58 @@ struct ContentView: View {
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
+            .holeFreeZone()
 
             // VU 电平表（立体声分段条）
             VUMeter(left: model.meterL, right: model.meterR, theme: theme)
                 .padding(.top, 2)
+                .holeFreeZone()
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
     // 传输控制
     private var transport: some View {
-        HStack(spacing: 28) {
+        HStack {
             Spacer()
-            transportButton(model.playMode.icon, size: 18,
-                            active: model.playMode != .sequential,
-                            help: model.playMode.label) {
-                model.playMode = model.playMode.next()
-            }
-            transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
-                .keyboardShortcut(.leftArrow, modifiers: .command)
-            Button { model.togglePlay() } label: {
-                if theme.physicalButtons {
-                    // 拟物大圆钮（博朗风格）
-                    Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 64, height: 64)
-                        .background(
-                            Circle()
-                                .fill(theme.accent)
-                                .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
-                        )
-                } else {
-                    Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 46))
-                        .foregroundStyle(theme.accent)
+            HStack(spacing: 28) {
+                transportButton(model.playMode.icon, size: 18,
+                                active: model.playMode != .sequential,
+                                help: model.playMode.label) {
+                    model.playMode = model.playMode.next()
                 }
+                transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                Button { model.togglePlay() } label: {
+                    if theme.physicalButtons {
+                        // 拟物大圆钮（博朗风格）
+                        Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 64, height: 64)
+                            .background(
+                                Circle()
+                                    .fill(theme.accent)
+                                    .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                            )
+                    } else {
+                        Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 46))
+                            .foregroundStyle(theme.accent)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(model.playlist.isEmpty)
+                .keyboardShortcut(.space, modifiers: [])
+                transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                // 占位平衡布局
+                Image(systemName: model.playMode.icon)
+                    .font(.system(size: 18))
+                    .opacity(0)
+                    .disabled(true)
             }
-            .buttonStyle(.plain)
-            .disabled(model.playlist.isEmpty)
-            .keyboardShortcut(.space, modifiers: [])
-            transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
-                .keyboardShortcut(.rightArrow, modifiers: .command)
-            // 占位平衡布局
-            Image(systemName: model.playMode.icon)
-                .font(.system(size: 18))
-                .opacity(0)
-                .disabled(true)
+            .holeFreeZone()
             Spacer()
         }
         .padding(.vertical, 6)
@@ -884,6 +912,26 @@ struct ContentView: View {
             .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
             .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 冲孔避让区域
+
+/// 收集面板控件的 frame，点阵绘制时避开这些区域
+struct HoleFreeRectKey: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value += nextValue()
+    }
+}
+
+extension View {
+    /// 声明该控件周围不绘制冲孔纹理
+    func holeFreeZone() -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: HoleFreeRectKey.self,
+                                   value: [geo.frame(in: .named("faceplate"))])
+        })
     }
 }
 
