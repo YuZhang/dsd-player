@@ -103,10 +103,12 @@ final class PlaybackEngine: @unchecked Sendable {
         guard let src = source else { return }
         if state == .paused {
             // 恢复播放：重新独占并配置设备（暂停期间其他应用可能改过格式）
-            let carrier = Double(outputRate(for: src))
-            if outputMode == .dop { AudioDeviceManager.acquireHogMode(device) }
-            try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
-                                                   bitPerfect: outputMode == .dop)
+            if outputMode == .dop {
+                let carrier = Double(outputRate(for: src))
+                AudioDeviceManager.acquireHogMode(device)
+                try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
+                                                       bitPerfect: true)
+            }
             deviceID = device
             if let au = audioUnit { AudioOutputUnitStart(au) }
             state = .playing
@@ -115,9 +117,13 @@ final class PlaybackEngine: @unchecked Sendable {
         if state == .playing { return }
 
         let carrier = Double(outputRate(for: src))
-        if outputMode == .dop { AudioDeviceManager.acquireHogMode(device) }
-        try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
-                                               bitPerfect: outputMode == .dop)
+        if outputMode == .dop {
+            // DoP 位元直通：独占设备并强制匹配格式
+            AudioDeviceManager.acquireHogMode(device)
+            try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
+                                                   bitPerfect: true)
+        }
+        // PCM 模式：不动设备格式（蓝牙等设备不能承受高速率），HAL 自动重采样
         deviceID = device
         try setupAudioUnit(device: device, carrier: carrier, channels: src.info.channelCount)
 
