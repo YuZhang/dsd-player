@@ -568,6 +568,7 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
+        .background(WindowConfigurator())   // 标题栏完全透明
     }
 
     private var hasStatusContent: Bool {
@@ -945,6 +946,22 @@ extension View {
                                    value: [geo.frame(in: .named("faceplate"))])
         })
     }
+}
+
+// MARK: - 窗口配置
+
+/// 让标题栏完全透明，面板内容铺满整个窗口（含标题栏区域）
+private struct WindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+        }
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - 滚动文本（超长歌名往返滚动）
