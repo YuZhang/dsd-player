@@ -546,6 +546,7 @@ struct ContentView: View {
                 transport
             }
             .coordinateSpace(name: "faceplate")
+            .frame(maxHeight: model.showPlaylist ? nil : .infinity, alignment: .top)
             .background(faceplateBackground)
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
             if model.showPlaylist {
@@ -568,7 +569,7 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
-        .ignoresSafeArea()   // 内容画进标题栏安全区，消除顶部异色条带
+        .ignoresSafeArea(.container, edges: .top)   // 仅向上画进标题栏，底部不受影响
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
@@ -597,6 +598,7 @@ struct ContentView: View {
             let d: CGFloat = 12
             let margin: CGFloat = 7   // 控件周围的无孔区
             let zones = holeFreeRects.map { $0.insetBy(dx: -margin, dy: -margin) }
+                + [CGRect(x: 0, y: 0, width: 78, height: 34)]   // 红绿灯按钮区域不画孔
             // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
             let count = Int((size.width - 2 * step + (step - d)) / step)
             let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
