@@ -1003,6 +1003,16 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true       // 面板空白处即可拖动窗口
+            // 标题栏装饰视图会画底部分隔线，隐藏它（红绿灯按钮在别的视图里，不受影响）
+            if let root = window.contentView?.superview {
+                for sub in root.subviews {
+                    for inner in sub.subviews {
+                        if String(describing: type(of: inner)).contains("DecorationView") {
+                            inner.isHidden = true
+                        }
+                    }
+                }
+            }
         }
     }
     func makeNSView(context: Context) -> View { View() }
