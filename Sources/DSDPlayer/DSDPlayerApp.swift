@@ -544,8 +544,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上部面板（博朗皮肤的冲孔画在面板背景上）
-            // 面板自身延伸进标题栏安全区：单一画布无接缝
+            // 上部面板：正文正常布局，不做任何手动补偿
             VStack(spacing: 0) {
                 header
                 nowPlaying
@@ -554,17 +553,23 @@ struct ContentView: View {
             .coordinateSpace(name: "faceplate")
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
             .background(faceplateBackground)
-            .ignoresSafeArea(.container, edges: .top)
             if model.showPlaylist {
                 Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 playlistView
+                    .background(theme.bgBottom)   // 不透明盖住冲孔
             }
         }
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
         .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
-        // 外层同样延伸到顶部：让底色覆盖窗口全部区域（含延伸产生的底部 28pt）
-        .ignoresSafeArea(.container, edges: .top)
-        .background(model.showPlaylist ? theme.bgBottom : theme.bgTop, ignoresSafeAreaEdges: .all)
+        // 背景负责延伸进标题栏（仅背景忽略顶部安全区，正文保持正常布局）
+        .background {
+            if theme.dotGrid {
+                holeCanvas
+                    .ignoresSafeArea(.container, edges: .top)
+            } else {
+                theme.bgBottom
+            }
+        }
         // 隐藏按钮承载方向键快进退快捷键
         .background(
             HStack {
@@ -580,53 +585,53 @@ struct ContentView: View {
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
-    private var faceplateBackground: some View {
-        ZStack {
-            // 冲孔皮肤用纯色面板；其余皮肤用渐变
-            if theme.dotGrid {
-                theme.bgTop
-                dotGridTexture
-            } else {
-                LinearGradient(colors: [theme.bgTop, theme.bgBottom],
-                               startPoint: .top, endPoint: .bottom)
-            }
-        }
-    }
-
-    /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
-    /// 水平方向对称布局：左右边缘留白相等
-    private var dotGridTexture: some View {
-        Canvas { ctx, size in
-            let step: CGFloat = 15
-            let d: CGFloat = 12
-            let margin: CGFloat = 7   // 控件周围的无孔区
-            var zones = holeFreeRects.map {
-                $0.insetBy(dx: -margin, dy: -margin)
-            }
-            zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域不画孔
-            // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
-            let count = Int((size.width - 2 * step + (step - d)) / step)
-            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-            var y: CGFloat = step
-            // 底部保留 step 余量：只画完整可见的行（含下缘高光）
-            while y + d + 3.5 <= size.height - step {
-                var x: CGFloat = startX
-                for _ in 0..<count {
-                    let hole = CGRect(x: x, y: y, width: d, height: d)
-                    if !zones.contains(where: { $0.intersects(hole) }) {
-                        // 下缘高光（先画，被孔遮住上半部分，露出下缘）
-                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
-                                 with: .color(.white.opacity(0.55)))
-                        // 孔体
-                        ctx.fill(Path(ellipseIn: hole),
-                                 with: .color(.black.opacity(0.18)))
-                    }
-                    x += step
+    /// 冲孔画布：面板色 + 冲孔铺满整个窗口（含标题栏），播放列表区域由列表自己的不透明底色盖住
+    private var holeCanvas: some View {
+        GeometryReader { geo in
+            // 画布与面板坐标系的偏移（画布顶在窗口顶，面板顶在安全区下）
+            let offsetY = geo.frame(in: .named("faceplate")).minY
+            Canvas { ctx, size in
+                ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.bgTop))
+                // 冲孔：深色孔 + 下缘高光；水平对称；避开控件与红绿灯区域
+                let step: CGFloat = 15
+                let d: CGFloat = 12
+                let margin: CGFloat = 7
+                var zones = holeFreeRects.map {
+                    $0.insetBy(dx: -margin, dy: -margin).offsetBy(dx: 0, dy: -offsetY)
                 }
-                y += step
+                zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域
+                // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
+                let count = Int((size.width - 2 * step + (step - d)) / step)
+                let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
+                var y: CGFloat = step
+                // 底部保留 step 余量：只画完整可见的行（含下缘高光）
+                while y + d + 3.5 <= size.height - step {
+                    var x: CGFloat = startX
+                    for _ in 0..<count {
+                        let hole = CGRect(x: x, y: y, width: d, height: d)
+                        if !zones.contains(where: { $0.intersects(hole) }) {
+                            ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
+                                     with: .color(.white.opacity(0.55)))
+                            ctx.fill(Path(ellipseIn: hole),
+                                     with: .color(.black.opacity(0.18)))
+                        }
+                        x += step
+                    }
+                    y += step
+                }
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private var faceplateBackground: some View {
+        // 博朗皮肤：面板底色与冲孔由外层背景统一绘制，此处透明
+        // 其余皮肤：面板渐变
+        if theme.dotGrid {
+            return AnyView(Color.clear)
+        }
+        return AnyView(LinearGradient(colors: [theme.bgTop, theme.bgBottom],
+                                      startPoint: .top, endPoint: .bottom))
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
@@ -958,6 +963,7 @@ private struct WindowConfigurator: NSViewRepresentable {
         func applySettings() {
             guard let window else { return }
             window.styleMask.insert(.fullSizeContentView)   // 内容区扩展到标题栏
+            window.styleMask.remove(.resizable)             // 禁止用户调整窗口大小
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true       // 面板空白处即可拖动窗口
