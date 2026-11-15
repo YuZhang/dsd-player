@@ -734,8 +734,9 @@ struct ContentView: View {
             .holeFreeZone()
             .padding(.horizontal, 56)   // 避让区只含内容；实测补偿后两侧恰好露出 3 个冲孔
 
-            // VU 电平表（立体声分段条，收窄）
-            VUMeter(left: model.meterL, right: model.meterR, theme: theme)
+            // VU 电平表（左声道 ← 指示灯 → 右声道，收窄）
+            VUMeter(left: model.meterL, right: model.meterR, theme: theme,
+                    isPlaying: model.state == .playing)
                 .padding(.top, 2)
                 .holeFreeZone()
                 .padding(.horizontal, 56)
@@ -1008,29 +1009,44 @@ struct MarqueeText: View {
 
 // MARK: - VU 电平表
 
+/// 左声道 ← 中央指示灯 → 右声道，电平从中间向两侧增长
 struct VUMeter: View {
     let left: Double    // 0...1
     let right: Double
     let theme: Theme
-    private let segments = 56
+    var isPlaying: Bool = false
+    private let segments = 28   // 每侧段数（组件总宽不变）
 
     var body: some View {
-        VStack(spacing: 3) {
-            row(left)
-            row(right)
-        }
-    }
-
-    private func row(_ level: Double) -> some View {
-        HStack(spacing: 1.5) {
-            ForEach(0..<segments, id: \.self) { i in
-                let pos = Double(i) / Double(segments)
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(pos < level ? segmentColor(pos) : theme.badgeBg)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 6)
+        HStack(spacing: 6) {
+            // 左声道：从中间向左增长
+            HStack(spacing: 1.5) {
+                ForEach(0..<segments, id: \.self) { i in
+                    let fromCenter = Double(segments - 1 - i) / Double(segments)  // 0=靠中间
+                    segment(lit: fromCenter < left, pos: fromCenter)
+                }
+            }
+            // 中央指示灯：播放时亮起
+            Circle()
+                .fill(isPlaying ? theme.accent : theme.badgeBg)
+                .frame(width: 13, height: 13)
+                .shadow(color: isPlaying ? theme.accent.opacity(0.8) : .clear,
+                        radius: 5)
+            // 右声道：从中间向右增长
+            HStack(spacing: 1.5) {
+                ForEach(0..<segments, id: \.self) { i in
+                    let fromCenter = Double(i) / Double(segments)
+                    segment(lit: fromCenter < right, pos: fromCenter)
+                }
             }
         }
+        .frame(height: 13)
+    }
+
+    private func segment(lit: Bool, pos: Double) -> some View {
+        RoundedRectangle(cornerRadius: 1.5)
+            .fill(lit ? segmentColor(pos) : theme.badgeBg)
+            .frame(maxWidth: .infinity)
     }
 
     private func segmentColor(_ pos: Double) -> Color {
