@@ -569,6 +569,7 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
         // 标题栏冲孔条：仅这层延伸进标题栏，不影响主内容布局与窗口尺寸
         .overlay(alignment: .top) {
