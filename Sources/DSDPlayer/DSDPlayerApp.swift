@@ -731,13 +731,13 @@ struct ContentView: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             .holeFreeZone()
-            .padding(.horizontal, 32)   // 避让区只含内容，padding 区域可显示冲孔
+            .padding(.horizontal, 56)   // 避让区只含内容；实测补偿后两侧恰好露出 3 个冲孔
 
             // VU 电平表（立体声分段条，收窄）
             VUMeter(left: model.meterL, right: model.meterR, theme: theme)
                 .padding(.top, 2)
                 .holeFreeZone()
-                .padding(.horizontal, 32)
+                .padding(.horizontal, 56)
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
