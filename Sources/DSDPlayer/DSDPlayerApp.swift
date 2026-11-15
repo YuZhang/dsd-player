@@ -562,12 +562,13 @@ struct ContentView: View {
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
         .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
         // 背景负责延伸进标题栏（仅背景忽略顶部安全区，正文保持正常布局）
+        // 标题栏区域与面板顶部同色：用 bgTop 而非 bgBottom
         .background {
             if theme.dotGrid {
                 holeCanvas
                     .ignoresSafeArea(.container, edges: .top)
             } else {
-                theme.bgBottom
+                theme.bgTop
             }
         }
         // 隐藏按钮承载方向键快进退快捷键
