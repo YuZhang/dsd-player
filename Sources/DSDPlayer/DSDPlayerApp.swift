@@ -21,10 +21,10 @@ enum PlayMode: Int, CaseIterable {
     }
     var label: String {
         switch self {
-        case .sequential: return "顺序播放"
-        case .loopAll: return "列表循环"
-        case .loopOne: return "单曲循环"
-        case .shuffle: return "随机播放"
+        case .sequential: return "Sequential"
+        case .loopAll: return "Loop All"
+        case .loopOne: return "Repeat One"
+        case .shuffle: return "Shuffle"
         }
     }
     func next() -> PlayMode {
@@ -106,7 +106,7 @@ final class PlayerModel: ObservableObject {
         }
         playlist = items
         if missing > 0 {
-            statusMessage = "\(missing) 个文件已移动或删除，未恢复"
+            statusMessage = "\(missing) file(s) moved or deleted, not restored"
         }
         if let idx = saved.currentIndex, playlist.indices.contains(idx) {
             load(at: idx)
@@ -246,7 +246,7 @@ final class PlayerModel: ObservableObject {
         let dffType = UTType(filenameExtension: "dff") ?? .data
         panel.allowedContentTypes = [dsfType, dffType]
         panel.allowsMultipleSelection = true
-        panel.message = "选择 DSD 音频文件 (.dsf / .dff)，可多选"
+        panel.message = "Choose DSD audio files (.dsf / .dff) — multiple selection allowed"
         guard panel.runModal() == .OK else { return }
         add(urls: panel.urls)
     }
@@ -284,7 +284,7 @@ final class PlayerModel: ObservableObject {
         }
         playlist.append(contentsOf: added)
         if !failures.isEmpty {
-            statusMessage = "无法解析: \(failures.joined(separator: ", "))"
+            statusMessage = "Cannot parse: \(failures.joined(separator: ", "))"
         }
         // 首个文件加入后自动加载（不自动播放）
         if currentIndex == nil, let first = added.first,
@@ -327,7 +327,7 @@ final class PlayerModel: ObservableObject {
 
     func play(at index: Int) {
         guard let dev = selectedDevice else {
-            statusMessage = "请选择输出设备"
+            statusMessage = "Select an output device"
             return
         }
         load(at: index)
@@ -474,7 +474,7 @@ struct ContentView: View {
                 .foregroundStyle(accent)
             Text("DSD Player")
                 .font(.headline)
-            Text("DoP 位元直通")
+            Text("DoP Bit-Perfect")
                 .font(.caption)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(accent.opacity(0.18))
@@ -484,13 +484,13 @@ struct ContentView: View {
             Picker("", selection: Binding(
                 get: { model.outputMode },
                 set: { model.setOutputMode($0) })) {
-                Text("DoP 直通").tag(OutputMode.dop)
-                Text("PCM 转换").tag(OutputMode.pcm)
+                Text("DoP").tag(OutputMode.dop)
+                Text("PCM").tag(OutputMode.pcm)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 150)
-            .help("DoP：位元直通给支持 DoP 的 DAC；PCM：转成高采样率 PCM，任意设备可用")
+            .frame(width: 130)
+            .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             Picker("", selection: $model.selectedDevice) {
                 ForEach(model.devices) { dev in
                     Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
@@ -502,7 +502,7 @@ struct ContentView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
-            .help("刷新设备列表")
+            .help("Refresh device list")
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -510,7 +510,7 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
-            Text(model.currentItem?.title ?? "未加载曲目")
+            Text(model.currentItem?.title ?? "No Track Loaded")
                 .font(.title3.weight(.semibold))
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
@@ -527,7 +527,7 @@ struct ContentView: View {
                           highlight: true)
                 }
             } else {
-                Text("添加 .dsf / .dff 文件开始播放")
+                Text("Add .dsf / .dff files to start playing")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -560,7 +560,7 @@ struct ContentView: View {
                             help: model.playMode.label) {
                 model.playMode = model.playMode.next()
             }
-            transportButton("backward.fill", size: 22, help: "上一首 (⌘←)") { model.previous() }
+            transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             Button { model.togglePlay() } label: {
                 Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
@@ -570,7 +570,7 @@ struct ContentView: View {
             .buttonStyle(.borderless)
             .disabled(model.playlist.isEmpty)
             .keyboardShortcut(.space, modifiers: [])
-            transportButton("forward.fill", size: 22, help: "下一首 (⌘→)") { model.next() }
+            transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
             // 占位平衡布局
             Image(systemName: model.playMode.icon)
@@ -599,13 +599,13 @@ struct ContentView: View {
     private var playlistView: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("播放列表")
+                Text("Playlist")
                     .font(.subheadline.weight(.medium))
-                Text("\(model.playlist.count) 首")
+                Text("\(model.playlist.count) tracks")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button { model.addFiles() } label: {
-                    Label("添加文件", systemImage: "plus")
+                    Label("Add Files", systemImage: "plus")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
@@ -618,7 +618,7 @@ struct ContentView: View {
                     Image(systemName: "music.note.list")
                         .font(.system(size: 30))
                         .foregroundStyle(.secondary)
-                    Text("拖入文件或文件夹，或点击「添加文件」")
+                    Text("Drop files or folders here, or click Add Files")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -628,7 +628,7 @@ struct ContentView: View {
                         playlistRow(idx: idx, item: item)
                             .tag(item.id)
                             .contextMenu {
-                                Button("移除") {
+                                Button("Remove") {
                                     if let i = model.playlist.firstIndex(of: item) {
                                         model.remove(at: IndexSet(integer: i))
                                     }
@@ -692,14 +692,14 @@ struct ContentView: View {
             } else if !model.deviceSupportsCarrier {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                Text("该设备可能不支持所需的 DoP 载波采样率")
+                Text("This device may not support the required DoP carrier rate")
                     .foregroundStyle(.orange)
             } else {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
                 Text(model.outputMode == .dop
-                     ? "播放期间请勿调节系统音量（会破坏 DoP 位元），请用 DAC/功放调音量"
-                     : "PCM 转换模式：可正常使用系统音量")
+                     ? "DoP is bit-perfect: don't change system volume while playing — use DAC/amp volume"
+                     : "PCM mode: system volume works normally")
                     .foregroundStyle(.secondary)
             }
             Spacer()

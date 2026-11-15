@@ -32,11 +32,11 @@ swift test           # run the unit tests (10 tests)
 
 ## Usage
 
-1. Drag DSD files or an album folder into the window (or click **添加文件 / Add Files**)
+1. Drag DSD files or an album folder into the window (or click **Add Files**)
 2. Pick the output device (USB DACs are auto-preferred and marked with ⚡)
 3. Choose the output mode:
-   - **DoP 直通 (DoP passthrough)** — bit-perfect DSD to capable DACs. The DAC display should switch to DSD. *Do not touch the system volume in this mode* — any sample manipulation breaks DoP markers; use the DAC/amp volume instead
-   - **PCM 转换 (PCM conversion)** — for built-in speakers / Bluetooth / anything else; system volume works normally
+   - **DoP** — bit-perfect DSD to capable DACs. The DAC display should switch to DSD. *Do not touch the system volume in this mode* — any sample manipulation breaks DoP markers; use the DAC/amp volume instead
+   - **PCM** — for built-in speakers / Bluetooth / anything else; system volume works normally
 4. Double-click a track to play
 
 The playlist, current track, play mode, and output mode are restored on next launch.

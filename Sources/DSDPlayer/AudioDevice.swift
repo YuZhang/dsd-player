@@ -19,9 +19,9 @@ enum AudioDeviceError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noSupportedFormat(let r):
-            return "所选设备不支持 \(Int(r)) Hz / 24bit 以上的输出格式，无法承载该 DoP 流"
+            return "Device doesn't support \(Int(r)) Hz / 24-bit+ output required for this DoP stream"
         case .setRateFailed(let s):
-            return "设置设备采样率失败 (OSStatus \(s))"
+            return "Failed to set device sample rate (OSStatus \(s))"
         }
     }
 }
@@ -85,7 +85,7 @@ enum AudioDeviceManager {
         let status = withUnsafeMutablePointer(to: &name) { ptr in
             AudioObjectGetPropertyData(id, &addr, 0, nil, &size, ptr)
         }
-        guard status == noErr else { return "设备 \(id)" }
+        guard status == noErr else { return "Device \(id)" }
         return name as String
     }
 

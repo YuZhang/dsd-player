@@ -152,7 +152,7 @@ final class PlaybackEngine: @unchecked Sendable {
         }
 
         let err = AudioOutputUnitStart(audioUnit!)
-        guard err == noErr else { throw DSDError.corruptFile("启动音频输出失败 (\(err))") }
+        guard err == noErr else { throw DSDError.corruptFile("Failed to start audio output (\(err))") }
         state = .playing
     }
 
@@ -277,12 +277,12 @@ final class PlaybackEngine: @unchecked Sendable {
             componentManufacturer: kAudioUnitManufacturer_Apple,
             componentFlags: 0, componentFlagsMask: 0)
         guard let comp = AudioComponentFindNext(nil, &desc) else {
-            throw DSDError.corruptFile("找不到音频输出组件")
+            throw DSDError.corruptFile("Audio output component not found")
         }
         var au: AudioUnit?
         var err = AudioComponentInstanceNew(comp, &au)
         guard err == noErr, let unit = au else {
-            throw DSDError.corruptFile("创建音频单元失败 (\(err))")
+            throw DSDError.corruptFile("Failed to create audio unit (\(err))")
         }
 
         var dev = device
@@ -291,7 +291,7 @@ final class PlaybackEngine: @unchecked Sendable {
                                    UInt32(MemoryLayout<AudioDeviceID>.size))
         guard err == noErr else {
             AudioComponentInstanceDispose(unit)
-            throw DSDError.corruptFile("绑定输出设备失败 (\(err))")
+            throw DSDError.corruptFile("Failed to bind output device (\(err))")
         }
 
         // 应用侧格式：交错 Int32，24-bit DoP 左对齐进 32-bit 容器
@@ -310,7 +310,7 @@ final class PlaybackEngine: @unchecked Sendable {
                                    UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
         guard err == noErr else {
             AudioComponentInstanceDispose(unit)
-            throw DSDError.corruptFile("设置输出格式失败 (\(err))")
+            throw DSDError.corruptFile("Failed to set output format (\(err))")
         }
 
         var callback = AURenderCallbackStruct(
@@ -321,13 +321,13 @@ final class PlaybackEngine: @unchecked Sendable {
                                    UInt32(MemoryLayout<AURenderCallbackStruct>.size))
         guard err == noErr else {
             AudioComponentInstanceDispose(unit)
-            throw DSDError.corruptFile("注册渲染回调失败 (\(err))")
+            throw DSDError.corruptFile("Failed to register render callback (\(err))")
         }
 
         err = AudioUnitInitialize(unit)
         guard err == noErr else {
             AudioComponentInstanceDispose(unit)
-            throw DSDError.corruptFile("初始化音频单元失败 (\(err))")
+            throw DSDError.corruptFile("Failed to initialize audio unit (\(err))")
         }
         audioUnit = unit
     }
@@ -472,7 +472,7 @@ final class PlaybackEngine: @unchecked Sendable {
             } catch {
                 feederLock.unlock()
                 let cb = onError
-                DispatchQueue.main.async { cb?("读取文件失败: \(error.localizedDescription)") }
+                DispatchQueue.main.async { cb?("Failed to read file: \(error.localizedDescription)") }
                 return
             }
         }

@@ -9,11 +9,11 @@ enum DSDError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedFormat(let s): return "不支持的文件格式: \(s)"
-        case .corruptFile(let s): return "文件损坏或无法解析: \(s)"
-        case .unsupportedChannels(let n): return "暂不支持 \(n) 声道（仅支持单声道/立体声）"
-        case .unsupportedSampleRate(let r): return "不支持的 DSD 采样率: \(r) Hz"
-        case .dstCompressed: return "暂不支持 DST 压缩的 DFF 文件"
+        case .unsupportedFormat(let s): return "Unsupported file format: \(s)"
+        case .corruptFile(let s): return "File is corrupt or unparseable: \(s)"
+        case .unsupportedChannels(let n): return "\(n) channels not supported (mono/stereo only)"
+        case .unsupportedSampleRate(let r): return "Unsupported DSD sample rate: \(r) Hz"
+        case .dstCompressed: return "DST-compressed DFF files are not supported"
         }
     }
 }
