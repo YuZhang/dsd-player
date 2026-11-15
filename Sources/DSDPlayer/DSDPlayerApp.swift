@@ -72,6 +72,8 @@ final class PlayerModel: ObservableObject {
     }
     @Published var state: PlaybackEngine.State = .idle
     @Published var position: Double = 0
+    @Published var meterL = 0.0   // VU 表电平 0...1（快攻慢放平滑后）
+    @Published var meterR = 0.0
     @Published var statusMessage = ""
 
     let engine = PlaybackEngine()
@@ -153,9 +155,21 @@ final class PlayerModel: ObservableObject {
     }
 
     private func tick() {
-        guard state == .playing || state == .paused else { return }
+        guard state == .playing || state == .paused else {
+            meterL *= 0.8; meterR *= 0.8   // 停止时电平衰减归零
+            return
+        }
         position = engine.positionSeconds
         updateNowPlaying()
+        // VU 表：读取引擎电平，快攻慢放
+        let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
+        let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
+        if state == .playing {
+            meterL = max(l, meterL * 0.7)
+            meterR = max(r, meterR * 0.7)
+        } else {
+            meterL *= 0.8; meterR *= 0.8
+        }
     }
 
     // MARK: 无缝续播预排
@@ -446,6 +460,7 @@ struct Theme {
     let statusBarBg: Color
     let isDark: Bool
     let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
+    let dotGrid: Bool           // 面板点阵纹理（博朗风格）
 }
 
 enum Skin: Int, CaseIterable, Identifiable {
@@ -473,9 +488,10 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.white.opacity(0.08),
                 statusBarBg: Color.black.opacity(0.25),
                 isDark: true,
-                physicalButtons: false)
+                physicalButtons: false,
+                dotGrid: false)
         case .braun:
-            // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮
+            // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮、面板点阵
             return Theme(
                 bgTop: Color(red: 0.937, green: 0.929, blue: 0.902),
                 bgBottom: Color(red: 0.878, green: 0.867, blue: 0.831),
@@ -483,7 +499,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.black.opacity(0.07),
                 statusBarBg: Color.black.opacity(0.06),
                 isDark: false,
-                physicalButtons: true)
+                physicalButtons: true,
+                dotGrid: true)
         case .terminal:
             // 绿磷光终端
             return Theme(
@@ -493,7 +510,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
                 statusBarBg: Color.black.opacity(0.3),
                 isDark: true,
-                physicalButtons: false)
+                physicalButtons: false,
+                dotGrid: false)
         }
     }
 }
@@ -508,17 +526,19 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
-            nowPlaying
-            transport
+            // 上部面板（博朗皮肤带细点阵纹理）
+            VStack(spacing: 0) {
+                header
+                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                nowPlaying
+                transport
+            }
+            .background(faceplateBackground)
             Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
             playlistView
             statusBar
         }
-        .background(
-            LinearGradient(colors: [theme.bgTop, theme.bgBottom], startPoint: .top, endPoint: .bottom)
-        )
+        .background(theme.bgBottom)
         // 隐藏按钮承载方向键快进退快捷键
         .background(
             HStack {
@@ -530,6 +550,32 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720, height: 560)
+    }
+
+    private var faceplateBackground: some View {
+        ZStack {
+            LinearGradient(colors: [theme.bgTop, theme.bgBottom],
+                           startPoint: .top, endPoint: .bottom)
+            if theme.dotGrid { dotGridTexture }
+        }
+    }
+
+    /// 博朗风格细点阵纹理
+    private var dotGridTexture: some View {
+        Canvas { ctx, size in
+            let step: CGFloat = 13
+            var y: CGFloat = step
+            while y < size.height {
+                var x: CGFloat = step
+                while x < size.width {
+                    ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: 1.3, height: 1.3)),
+                             with: .color(.black.opacity(0.045)))
+                    x += step
+                }
+                y += step
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
@@ -632,6 +678,10 @@ struct ContentView: View {
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
+
+            // VU 电平表（立体声分段条）
+            VUMeter(left: model.meterL, right: model.meterR, theme: theme)
+                .padding(.top, 2)
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
@@ -822,6 +872,39 @@ struct ContentView: View {
             .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
             .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - VU 电平表
+
+struct VUMeter: View {
+    let left: Double    // 0...1
+    let right: Double
+    let theme: Theme
+    private let segments = 32
+
+    var body: some View {
+        VStack(spacing: 3) {
+            row(left)
+            row(right)
+        }
+    }
+
+    private func row(_ level: Double) -> some View {
+        HStack(spacing: 2) {
+            ForEach(0..<segments, id: \.self) { i in
+                let pos = Double(i) / Double(segments)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(pos < level ? segmentColor(pos) : theme.badgeBg)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 5)
+            }
+        }
+    }
+
+    private func segmentColor(_ pos: Double) -> Color {
+        if pos > 0.9 { return .red.opacity(0.9) }   // 峰值区红色警示
+        return theme.accent
     }
 }
 

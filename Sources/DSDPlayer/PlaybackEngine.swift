@@ -62,6 +62,8 @@ final class PlaybackEngine: @unchecked Sendable {
     private let pendingSilenceFrames = Atomic<Int>(0)  // DoP 边界静音帧数（防切换爆音）
     private let fadeInSamples = Atomic<Int>(0)         // PCM 边界渐入采样数
     private let silencePhase = Atomic<Int>(0)          // 渲染线程 DoP 静音标记相位
+    let levelL = Atomic<Int>(0)  // VU 电平 0...1000（喂数据线程写入，UI 读取）
+    let levelR = Atomic<Int>(0)
 
     /// 当前输出采样率（DoP 载波或 PCM 率）
     private func outputRate(for src: DSDSource) -> Int {
@@ -364,6 +366,15 @@ final class PlaybackEngine: @unchecked Sendable {
         if got >= ch, !modeIsPCM.load(ordering: .relaxed) {
             let w = UInt32(bitPattern: ptr[got - ch])
             silencePhase.store((w >> 24) == 0x05 ? 1 : 0, ordering: .relaxed)
+        }
+        // VU 电平（按实际渲染位置计算，与听觉同步）
+        if got > 0 {
+            let isPCM = modeIsPCM.load(ordering: .relaxed)
+            let (l, r) = isPCM
+                ? estimateLevelsPCM(ptr, count: got, channels: ch)
+                : estimateLevelsDoP(ptr, count: got, channels: ch)
+            levelL.store(Int(l * 1000), ordering: .relaxed)
+            levelR.store(Int(r * 1000), ordering: .relaxed)
         }
         // 无缝切换边界：渲染越过后才提交新曲目起点并通知（UI 与听觉同步）
         let newRendered = renderedFrames.add(got / ch, ordering: .relaxed).newValue

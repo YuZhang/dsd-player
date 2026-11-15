@@ -43,6 +43,40 @@ struct DoPEncoder {
     }
 }
 
+/// 从 DoP 帧估计左右声道电平（0...1）。
+/// 原理：1-bit DSD 流的局部比特密度相对 0.5 的偏移即瞬时幅度；乘以 √2 做 RMS→峰值补偿。
+func estimateLevelsDoP(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -> (Double, Double) {
+    var sum0 = 0, sum1 = 0
+    for i in 0..<count {
+        let w = UInt32(bitPattern: ptr[i])
+        let bits = (UInt8(truncatingIfNeeded: w >> 16)).nonzeroBitCount
+                 + (UInt8(truncatingIfNeeded: w >> 8)).nonzeroBitCount
+        if channels == 2, i & 1 == 1 { sum1 += bits } else { sum0 += bits }
+    }
+    let framesPerCh = channels == 2 ? count / 2 : count
+    guard framesPerCh > 0 else { return (0, 0) }
+    func level(_ sum: Int) -> Double {
+        let density = Double(sum) / Double(framesPerCh * 16)
+        return min(1.0, abs(density - 0.5) * 2 * 1.414)
+    }
+    return (level(sum0), channels == 2 ? level(sum1) : level(sum0))
+}
+
+/// 从 Int32 PCM 采样估计左右声道 RMS 电平（0...1，√2 补偿）。
+func estimateLevelsPCM(_ ptr: UnsafePointer<Int32>, count: Int, channels: Int) -> (Double, Double) {
+    var sumSq0 = 0.0, sumSq1 = 0.0
+    for i in 0..<count {
+        let v = Double(ptr[i]) / 0x1p31
+        if channels == 2, i & 1 == 1 { sumSq1 += v * v } else { sumSq0 += v * v }
+    }
+    let framesPerCh = channels == 2 ? count / 2 : count
+    guard framesPerCh > 0 else { return (0, 0) }
+    func level(_ sumSq: Double) -> Double {
+        min(1.0, (sumSq / Double(framesPerCh)).squareRoot() * 1.414)
+    }
+    return (level(sumSq0), channels == 2 ? level(sumSq1) : level(sumSq0))
+}
+
 /// 单生产者单消费者无锁环形缓冲（Int32 采样）。
 /// 生产者 = 喂数据线程，消费者 = CoreAudio 渲染回调（实时线程，不可阻塞）。
 final class RingBuffer: @unchecked Sendable {

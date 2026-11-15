@@ -181,6 +181,48 @@ final class DSDPlayerTests: XCTestCase {
         }
     }
 
+    // MARK: - VU 电平估计
+
+    func testLevelEstimationDoP() throws {
+        // DoP 静音 (0x69) 密度恰为 0.5 → 电平 0
+        var silentWords = [Int32](repeating: 0, count: 1024)
+        for i in 0..<1024 {
+            let marker: UInt32 = i % 2 == 0 ? 0x05 : 0xFA
+            silentWords[i] = Int32(bitPattern: (marker << 24) | (0x69 << 16) | (0x69 << 8))
+        }
+        let (l0, r0) = silentWords.withUnsafeBufferPointer {
+            estimateLevelsDoP($0.baseAddress!, count: 1024, channels: 2)
+        }
+        XCTAssertEqual(l0, 0, accuracy: 0.01)
+        XCTAssertEqual(r0, 0, accuracy: 0.01)
+
+        // 全 1 载荷 → 满幅
+        var fullWords = [Int32](repeating: 0, count: 1024)
+        for i in 0..<1024 {
+            let marker: UInt32 = i % 2 == 0 ? 0x05 : 0xFA
+            fullWords[i] = Int32(bitPattern: (marker << 24) | (0xFF << 16) | (0xFF << 8))
+        }
+        let (l1, _) = fullWords.withUnsafeBufferPointer {
+            estimateLevelsDoP($0.baseAddress!, count: 1024, channels: 2)
+        }
+        XCTAssertEqual(l1, 1.0, accuracy: 0.01)
+    }
+
+    func testLevelEstimationPCM() throws {
+        // 静音 → 0；满幅方波 → 1.0（RMS × √2 截顶）
+        let silence = [Int32](repeating: 0, count: 512)
+        let (zl, _) = silence.withUnsafeBufferPointer {
+            estimateLevelsPCM($0.baseAddress!, count: 512, channels: 2)
+        }
+        XCTAssertEqual(zl, 0)
+
+        let full = [Int32](repeating: Int32.max / 2, count: 512)  // RMS 0.5 → 0.707
+        let (fl, _) = full.withUnsafeBufferPointer {
+            estimateLevelsPCM($0.baseAddress!, count: 512, channels: 2)
+        }
+        XCTAssertEqual(fl, 0.707, accuracy: 0.02)
+    }
+
     // MARK: - 皮肤与持久化
 
     func testSkinEnumRoundTrip() {
