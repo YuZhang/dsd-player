@@ -645,6 +645,7 @@ struct ContentView: View {
                     .font(.headline)
             }
             .holeFreeZone()
+            .padding(.leading, 64)   // 避开红绿灯按钮
             Spacer()
             Picker("", selection: Binding(
                 get: { model.outputMode },
@@ -702,7 +703,7 @@ struct ContentView: View {
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
-        .padding(.top, 28)   // 避开红绿灯；上方不留冲孔行
+        .padding(.top, 3)   // 与红绿灯同处标题栏一行
         .padding(.bottom, 12)
     }
 
