@@ -570,7 +570,40 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
+        // 标题栏冲孔条：仅这层延伸进标题栏，不影响主内容布局与窗口尺寸
+        .overlay(alignment: .top) {
+            if theme.dotGrid {
+                titlebarHoles
+                    .frame(height: 28)
+                    .ignoresSafeArea(.container, edges: .top)
+                    .allowsHitTesting(false)
+            }
+        }
         .background(WindowConfigurator())   // 标题栏完全透明
+    }
+
+    /// 标题栏区域的冲孔条（仅博朗皮肤），与面板网格对齐
+    private var titlebarHoles: some View {
+        Canvas { ctx, size in
+            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.bgTop))
+            let step: CGFloat = 15
+            let d: CGFloat = 12
+            let count = Int((size.width - 2 * step + (step - d)) / step)
+            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
+            let lightZone = CGRect(x: 0, y: 0, width: 78, height: 34)
+            var x = startX
+            for _ in 0..<count {
+                // 与面板网格对齐：面板首行 = 面板顶+15，面板顶 = 标题栏底
+                let hole = CGRect(x: x, y: 15, width: d, height: d)
+                if !lightZone.intersects(hole) {
+                    ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
+                             with: .color(.white.opacity(0.55)))
+                    ctx.fill(Path(ellipseIn: hole),
+                             with: .color(.black.opacity(0.18)))
+                }
+                x += step
+            }
+        }
     }
 
     private var hasStatusContent: Bool {
@@ -588,7 +621,6 @@ struct ContentView: View {
                                startPoint: .top, endPoint: .bottom)
             }
         }
-        .padding(.top, -28)   // 向上延伸覆盖标题栏（隐藏标题栏高 28pt）
     }
 
     /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
@@ -598,15 +630,15 @@ struct ContentView: View {
             let step: CGFloat = 15
             let d: CGFloat = 12
             let margin: CGFloat = 7   // 控件周围的无孔区
-            // 画布比面板高 28pt（向上延伸覆盖标题栏），控件坐标需 +28 补偿
             var zones = holeFreeRects.map {
-                $0.insetBy(dx: -margin, dy: -margin).offsetBy(dx: 0, dy: 28)
+                $0.insetBy(dx: -margin, dy: -margin)
             }
             zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域不画孔
             // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
             let count = Int((size.width - 2 * step + (step - d)) / step)
             let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-            var y: CGFloat = step
+            // 标题栏条带的孔在窗口 y=15；面板从 28pt 开始，首行取 2 使网格连续（15、30、45…）
+            var y: CGFloat = 2
             // 底部保留 step 余量：只画完整可见的行（含下缘高光）
             while y + d + 3.5 <= size.height - step {
                 var x: CGFloat = startX
