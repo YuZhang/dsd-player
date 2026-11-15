@@ -599,7 +599,8 @@ struct ContentView: View {
             let count = Int((size.width - 2 * step + (step - d)) / step)
             let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
             var y: CGFloat = step
-            while y < size.height {
+            // 底部同样保留 step 余量：只画完整可见的行（含下缘高光）
+            while y + d + 3.5 <= size.height - step {
                 var x: CGFloat = startX
                 for _ in 0..<count {
                     let hole = CGRect(x: x, y: y, width: d, height: d)
@@ -856,7 +857,7 @@ struct ContentView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(height: 352)   // 固定高度：恰好 10 首
+                .frame(height: 400)   // 固定高度：恰好 10 首（实测行距 39.7pt）
             }
         }
         .frame(maxWidth: .infinity)
@@ -894,7 +895,7 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 52, alignment: .trailing)
         }
-        .padding(.vertical, 3)
+        .frame(height: 30)   // 固定行高，列表高度 = 10 行 × 32pt
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { selection = [item.id] }
