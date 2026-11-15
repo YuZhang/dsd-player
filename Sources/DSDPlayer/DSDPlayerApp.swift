@@ -546,7 +546,6 @@ struct ContentView: View {
                 transport
             }
             .coordinateSpace(name: "faceplate")
-            .frame(maxHeight: model.showPlaylist ? nil : .infinity, alignment: .top)
             .background(faceplateBackground)
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
             if model.showPlaylist {
@@ -557,7 +556,8 @@ struct ContentView: View {
                 statusBar
             }
         }
-        .background(theme.bgBottom)
+        // 底色：收起列表时用面板色（延伸区无缝），展开时用列表底色
+        .background(model.showPlaylist ? theme.bgBottom : theme.bgTop)
         // 隐藏按钮承载方向键快进退快捷键
         .background(
             HStack {
@@ -569,7 +569,6 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
-        .ignoresSafeArea(.container, edges: .top)   // 仅向上画进标题栏，底部不受影响
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
@@ -593,32 +592,38 @@ struct ContentView: View {
     /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
     /// 水平方向对称布局：左右边缘留白相等
     private var dotGridTexture: some View {
-        Canvas { ctx, size in
-            let step: CGFloat = 15
-            let d: CGFloat = 12
-            let margin: CGFloat = 7   // 控件周围的无孔区
-            let zones = holeFreeRects.map { $0.insetBy(dx: -margin, dy: -margin) }
-                + [CGRect(x: 0, y: 0, width: 78, height: 34)]   // 红绿灯按钮区域不画孔
-            // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
-            let count = Int((size.width - 2 * step + (step - d)) / step)
-            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
-            var y: CGFloat = step
-            // 底部同样保留 step 余量：只画完整可见的行（含下缘高光）
-            while y + d + 3.5 <= size.height - step {
-                var x: CGFloat = startX
-                for _ in 0..<count {
-                    let hole = CGRect(x: x, y: y, width: d, height: d)
-                    if !zones.contains(where: { $0.intersects(hole) }) {
-                        // 下缘高光（先画，被孔遮住上半部分，露出下缘）
-                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
-                                 with: .color(.white.opacity(0.55)))
-                        // 孔体
-                        ctx.fill(Path(ellipseIn: hole),
-                                 with: .color(.black.opacity(0.18)))
-                    }
-                    x += step
+        GeometryReader { geo in
+            // 背景向上延伸进标题栏安全区，面板的避让坐标系需要补偿这段偏移
+            let offsetY = geo.frame(in: .named("faceplate")).minY
+            Canvas { ctx, size in
+                let step: CGFloat = 15
+                let d: CGFloat = 12
+                let margin: CGFloat = 7   // 控件周围的无孔区
+                var zones = holeFreeRects.map {
+                    $0.insetBy(dx: -margin, dy: -margin).offsetBy(dx: 0, dy: -offsetY)
                 }
-                y += step
+                zones.append(CGRect(x: 0, y: 0, width: 78, height: 34))   // 红绿灯按钮区域不画孔
+                // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
+                let count = Int((size.width - 2 * step + (step - d)) / step)
+                let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
+                var y: CGFloat = step
+                // 底部同样保留 step 余量：只画完整可见的行（含下缘高光）
+                while y + d + 3.5 <= size.height - step {
+                    var x: CGFloat = startX
+                    for _ in 0..<count {
+                        let hole = CGRect(x: x, y: y, width: d, height: d)
+                        if !zones.contains(where: { $0.intersects(hole) }) {
+                            // 下缘高光（先画，被孔遮住上半部分，露出下缘）
+                            ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
+                                     with: .color(.white.opacity(0.55)))
+                            // 孔体
+                            ctx.fill(Path(ellipseIn: hole),
+                                     with: .color(.black.opacity(0.18)))
+                        }
+                        x += step
+                    }
+                    y += step
+                }
             }
         }
         .allowsHitTesting(false)
@@ -635,7 +640,6 @@ struct ContentView: View {
                     .font(.headline)
             }
             .holeFreeZone()
-            .padding(.leading, 64)   // 避开隐藏标题栏后的红绿灯按钮
             Spacer()
             Picker("", selection: Binding(
                 get: { model.outputMode },
