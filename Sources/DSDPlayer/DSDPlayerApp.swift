@@ -652,13 +652,14 @@ struct ContentView: View {
             .frame(width: 130)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
-            // 告警图标：设备不兼容或出错时显示，悬停查看详情
-            if let warning = model.warningText {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help(warning)
-                    .holeFreeZone()
-            }
+            // 告警图标：固定占位，有告警时显示，悬停查看详情（不影响其他控件位置）
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .opacity(model.warningText != nil ? 1 : 0)
+                .allowsHitTesting(model.warningText != nil)
+                .help(model.warningText ?? "")
+                .frame(width: 18)
+                .holeFreeZone()
             Picker("", selection: $model.selectedDevice) {
                 ForEach(model.devices) { dev in
                     Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
