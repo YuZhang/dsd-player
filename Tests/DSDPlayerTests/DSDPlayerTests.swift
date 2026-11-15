@@ -181,6 +181,47 @@ final class DSDPlayerTests: XCTestCase {
         }
     }
 
+    // MARK: - 皮肤与持久化
+
+    func testSkinEnumRoundTrip() {
+        // 每个皮肤的 rawValue 可逆，且主题参数完整
+        XCTAssertEqual(Skin.allCases.count, 3)
+        for skin in Skin.allCases {
+            XCTAssertEqual(Skin(rawValue: skin.rawValue), skin)
+            let t = skin.theme
+            _ = t.bgTop; _ = t.bgBottom; _ = t.accent; _ = t.badgeBg; _ = t.statusBarBg
+            XCTAssertFalse(skin.name.isEmpty)
+        }
+        XCTAssertNil(Skin(rawValue: 99))  // 非法值安全返回 nil
+    }
+
+    func testSavedStateBackwardCompatibility() throws {
+        // 旧版本数据没有 skin 字段，必须能解码且 skin 为 nil
+        let oldJSON = #"{"paths":["/tmp/a.dsf","/tmp/b.dff"],"currentIndex":0,"playMode":1,"outputMode":0}"#
+        let s = try JSONDecoder().decode(SavedState.self, from: Data(oldJSON.utf8))
+        XCTAssertEqual(s.paths.count, 2)
+        XCTAssertEqual(s.currentIndex, 0)
+        XCTAssertEqual(s.playMode, 1)
+        XCTAssertEqual(s.outputMode, 0)
+        XCTAssertNil(s.skin)
+        // 调用方应回退到默认皮肤
+        XCTAssertEqual(Skin(rawValue: s.skin ?? 0) ?? .dark, .dark)
+    }
+
+    func testSavedStateRoundTrip() throws {
+        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
+                                  playMode: 3, outputMode: 1, skin: 1)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SavedState.self, from: data)
+        XCTAssertEqual(decoded, original)
+    }
+
+    func testSavedStateCorruptData() {
+        // 损坏数据应解码失败（调用方视为无保存状态）
+        XCTAssertThrowsError(try JSONDecoder().decode(SavedState.self,
+                                                      from: Data("not json".utf8)))
+    }
+
     // MARK: - DSD→PCM 转换
 
     func testDSDToPCMFullScale() throws {

@@ -3,6 +3,16 @@ import AppKit
 import MediaPlayer
 import UniformTypeIdentifiers
 
+// MARK: - 持久化状态（internal 以便单元测试）
+
+struct SavedState: Codable, Equatable {
+    let paths: [String]
+    let currentIndex: Int?
+    let playMode: Int
+    let outputMode: Int
+    let skin: Int?   // 旧版本数据无此字段，解码为 nil 时用默认
+}
+
 // MARK: - 播放模式
 
 enum PlayMode: Int, CaseIterable {
@@ -70,13 +80,6 @@ final class PlayerModel: ObservableObject {
 
     // MARK: 持久化
 
-    private struct SavedState: Codable {
-        let paths: [String]
-        let currentIndex: Int?
-        let playMode: Int
-        let outputMode: Int
-        let skin: Int?   // 旧版本数据无此字段，解码为 nil 时用默认
-    }
     private let persistKey = "DSDPlayer.savedState"
     private var isRestoring = false
 

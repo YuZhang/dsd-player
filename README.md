@@ -15,6 +15,9 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **Playback modes**: sequential, loop-all, repeat-one, shuffle; previous/next with smart restart (first 3 seconds)
 - **System integration**: media keys, Lock Screen / Control Center now-playing, keyboard shortcuts
   - `Space` play/pause · `←`/`→` seek ±5s · `⌘←`/`⌘→` previous/next track
+- **Skins**: Dark (default), Braun Retro (warm off-white body, physical orange knobs), Terminal Green — pick from the paintbrush menu; choice persists
+
+![Braun Retro skin](Resources/skin_braun.png)
 
 ## Requirements
 
