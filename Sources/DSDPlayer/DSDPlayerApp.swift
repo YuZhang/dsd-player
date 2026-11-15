@@ -536,7 +536,6 @@ struct ContentView: View {
             // 上部面板（博朗皮肤带冲孔纹理，避开控件区域）
             VStack(spacing: 0) {
                 header
-                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
                 nowPlaying
                 transport
             }
@@ -578,7 +577,7 @@ struct ContentView: View {
     private var dotGridTexture: some View {
         Canvas { ctx, size in
             let step: CGFloat = 15
-            let d: CGFloat = 4.2
+            let d: CGFloat = 12
             let margin: CGFloat = 7   // 控件周围的无孔区
             let zones = holeFreeRects.map { $0.insetBy(dx: -margin, dy: -margin) }
             var y: CGFloat = step
@@ -588,7 +587,7 @@ struct ContentView: View {
                     let hole = CGRect(x: x, y: y, width: d, height: d)
                     if !zones.contains(where: { $0.intersects(hole) }) {
                         // 下缘高光（先画，被孔遮住上半部分，露出下缘）
-                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 1.4)),
+                        ctx.fill(Path(ellipseIn: hole.offsetBy(dx: 0, dy: 3.5)),
                                  with: .color(.white.opacity(0.55)))
                         // 孔体
                         ctx.fill(Path(ellipseIn: hole),
@@ -673,10 +672,10 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
-            Text(model.currentItem?.title ?? "No Track Loaded")
-                .font(.title3.weight(.semibold))
-                .lineLimit(1).truncationMode(.middle)
+            MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
+                        font: .title3.weight(.semibold))
                 .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
                 .holeFreeZone()
 
             if let info = model.currentInfo {
@@ -932,6 +931,61 @@ extension View {
             Color.clear.preference(key: HoleFreeRectKey.self,
                                    value: [geo.frame(in: .named("faceplate"))])
         })
+    }
+}
+
+// MARK: - 滚动文本（超长歌名往返滚动）
+
+struct MarqueeText: View {
+    let text: String
+    var font: Font = .title3.weight(.semibold)
+
+    @State private var startDate = Date()
+
+    /// 用 NSFont 直接测量文本宽度（title3 字号的近似值，对滚动判定足够精确）
+    private var textWidth: CGFloat {
+        let size = NSFont.preferredFont(forTextStyle: .title3).pointSize
+        let nsFont = NSFont.systemFont(ofSize: size, weight: .semibold)
+        return (text as NSString).size(withAttributes: [.font: nsFont]).width
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let overflow = textWidth - geo.size.width
+            if overflow > 0 {
+                // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
+                TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
+                    Text(text)
+                        .font(font)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .offset(x: -scrollDistance(at: context.date, overflow: overflow))
+                }
+            } else {
+                Text(text)
+                    .font(font)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)   // 短文本居中
+            }
+        }
+        .frame(height: 26)
+        .clipped()
+        .onChange(of: text) { startDate = Date() }
+    }
+
+    private func scrollDistance(at date: Date, overflow: CGFloat) -> CGFloat {
+        let pause = 1.5
+        let move = Double(overflow) / 40   // 40pt/s
+        let cycle = (pause + move) * 2
+        var t = date.timeIntervalSince(startDate).truncatingRemainder(dividingBy: cycle)
+        if t < pause { return 0 }
+        t -= pause
+        if t < move { return CGFloat(t / move) * overflow }
+        t -= move
+        if t < pause { return overflow }
+        t -= pause
+        return overflow - CGFloat(min(t / move, 1)) * overflow
     }
 }
 
