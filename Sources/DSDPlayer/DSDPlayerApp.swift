@@ -10,7 +10,8 @@ struct SavedState: Codable, Equatable {
     let currentIndex: Int?
     let playMode: Int
     let outputMode: Int
-    let skin: Int?   // 旧版本数据无此字段，解码为 nil 时用默认
+    let skin: Int?          // 旧版本数据无此字段，解码为 nil 时用默认
+    let showPlaylist: Bool? // 同上
 }
 
 // MARK: - 播放模式
@@ -70,6 +71,9 @@ final class PlayerModel: ObservableObject {
     @Published var skin: Skin = .dark {
         didSet { persist() }
     }
+    @Published var showPlaylist = true {
+        didSet { persist() }
+    }
     @Published var state: PlaybackEngine.State = .idle
     @Published var position: Double = 0
     @Published var meterL = 0.0   // VU 表电平 0...1（快攻慢放平滑后）
@@ -92,7 +96,8 @@ final class PlayerModel: ObservableObject {
                                currentIndex: currentIndex,
                                playMode: playMode.rawValue,
                                outputMode: outputMode.rawValue,
-                               skin: skin.rawValue)
+                               skin: skin.rawValue,
+                               showPlaylist: showPlaylist)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -106,6 +111,7 @@ final class PlayerModel: ObservableObject {
         }
         playMode = PlayMode(rawValue: saved.playMode) ?? .sequential
         skin = Skin(rawValue: saved.skin ?? 0) ?? .dark
+        showPlaylist = saved.showPlaylist ?? true
         outputMode = OutputMode(rawValue: saved.outputMode) ?? .dop
         engine.outputMode = outputMode
         var items: [PlaylistItem] = []
@@ -542,9 +548,13 @@ struct ContentView: View {
             .coordinateSpace(name: "faceplate")
             .background(faceplateBackground)
             .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
-            Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
-            playlistView
-            statusBar
+            if model.showPlaylist {
+                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                playlistView
+            }
+            if hasStatusContent {
+                statusBar
+            }
         }
         .background(theme.bgBottom)
         // 隐藏按钮承载方向键快进退快捷键
@@ -557,7 +567,12 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
-        .frame(width: 720, height: 560)
+        .frame(width: 720)
+        .frame(height: model.showPlaylist ? 560 : nil)
+    }
+
+    private var hasStatusContent: Bool {
+        !model.statusMessage.isEmpty || !model.deviceSupportsCarrier
     }
 
     private var faceplateBackground: some View {
@@ -657,7 +672,7 @@ struct ContentView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "paintbrush")
+                    Image(systemName: "tshirt")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -696,7 +711,7 @@ struct ContentView: View {
                     .holeFreeZone()
             }
 
-            // 进度
+            // 进度（收窄，两侧露出冲孔）
             HStack(spacing: 10) {
                 Text(formatTime(model.position))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -712,11 +727,13 @@ struct ContentView: View {
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 32)
             .holeFreeZone()
 
-            // VU 电平表（立体声分段条）
+            // VU 电平表（立体声分段条，收窄）
             VUMeter(left: model.meterL, right: model.meterR, theme: theme)
                 .padding(.top, 2)
+                .padding(.horizontal, 32)
                 .holeFreeZone()
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
@@ -757,16 +774,18 @@ struct ContentView: View {
                 .keyboardShortcut(.space, modifiers: [])
                 transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
-                // 占位平衡布局
-                Image(systemName: model.playMode.icon)
-                    .font(.system(size: 18))
-                    .opacity(0)
-                    .disabled(true)
+                // 列表显隐
+                transportButton("list.bullet", size: 18,
+                                active: model.showPlaylist,
+                                help: model.showPlaylist ? "Hide Playlist" : "Show Playlist") {
+                    model.showPlaylist.toggle()
+                }
             }
             .holeFreeZone()
             Spacer()
         }
-        .padding(.vertical, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 16)   // 留出空间让最下一行冲孔完整显示
     }
 
     private func transportButton(_ icon: String, size: CGFloat, active: Bool = false,
@@ -889,13 +908,6 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
                 Text("This device may not support the required DoP carrier rate")
                     .foregroundStyle(.orange)
-            } else {
-                Image(systemName: "info.circle")
-                    .foregroundStyle(.secondary)
-                Text(model.outputMode == .dop
-                     ? "DoP is bit-perfect: don't change system volume while playing — use DAC/amp volume"
-                     : "PCM mode: system volume works normally")
-                    .foregroundStyle(.secondary)
             }
             Spacer()
         }

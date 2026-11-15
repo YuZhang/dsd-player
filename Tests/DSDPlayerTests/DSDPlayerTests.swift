@@ -246,13 +246,14 @@ final class DSDPlayerTests: XCTestCase {
         XCTAssertEqual(s.playMode, 1)
         XCTAssertEqual(s.outputMode, 0)
         XCTAssertNil(s.skin)
-        // 调用方应回退到默认皮肤
+        XCTAssertNil(s.showPlaylist)
+        // 调用方应回退到默认皮肤与显示列表
         XCTAssertEqual(Skin(rawValue: s.skin ?? 0) ?? .dark, .dark)
     }
 
     func testSavedStateRoundTrip() throws {
         let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
-                                  playMode: 3, outputMode: 1, skin: 1)
+                                  playMode: 3, outputMode: 1, skin: 1, showPlaylist: false)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(SavedState.self, from: data)
         XCTAssertEqual(decoded, original)
