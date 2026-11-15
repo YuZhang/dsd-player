@@ -628,13 +628,8 @@ struct ContentView: View {
     }
 
     private var faceplateBackground: some View {
-        // 博朗皮肤：面板底色与冲孔由外层背景统一绘制，此处透明
-        // 其余皮肤：面板渐变
-        if theme.dotGrid {
-            return AnyView(Color.clear)
-        }
-        return AnyView(LinearGradient(colors: [theme.bgTop, theme.bgBottom],
-                                      startPoint: .top, endPoint: .bottom))
+        // 纯色面板：与标题栏（外层背景 bgTop）严格同源同色
+        theme.bgTop
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
