@@ -57,6 +57,9 @@ final class PlayerModel: ObservableObject {
         }
     }
     @Published var outputMode: OutputMode = .dop
+    @Published var skin: Skin = .dark {
+        didSet { persist() }
+    }
     @Published var state: PlaybackEngine.State = .idle
     @Published var position: Double = 0
     @Published var statusMessage = ""
@@ -72,6 +75,7 @@ final class PlayerModel: ObservableObject {
         let currentIndex: Int?
         let playMode: Int
         let outputMode: Int
+        let skin: Int?   // 旧版本数据无此字段，解码为 nil 时用默认
     }
     private let persistKey = "DSDPlayer.savedState"
     private var isRestoring = false
@@ -81,7 +85,8 @@ final class PlayerModel: ObservableObject {
         let saved = SavedState(paths: playlist.map { $0.url.path },
                                currentIndex: currentIndex,
                                playMode: playMode.rawValue,
-                               outputMode: outputMode.rawValue)
+                               outputMode: outputMode.rawValue,
+                               skin: skin.rawValue)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -94,6 +99,7 @@ final class PlayerModel: ObservableObject {
             persist()   // 写回规范化后的状态（已移除不存在的文件）
         }
         playMode = PlayMode(rawValue: saved.playMode) ?? .sequential
+        skin = Skin(rawValue: saved.skin ?? 0) ?? .dark
         outputMode = OutputMode(rawValue: saved.outputMode) ?? .dop
         engine.outputMode = outputMode
         var items: [PlaylistItem] = []
@@ -427,12 +433,67 @@ final class PlayerModel: ObservableObject {
     }
 }
 
-// MARK: - 主题
+// MARK: - 主题 / 皮肤
 
-private let accent = Color(red: 0.93, green: 0.68, blue: 0.30)   // 琥珀金
-private let bgTop = Color(red: 0.10, green: 0.09, blue: 0.13)
-private let bgBottom = Color(red: 0.06, green: 0.06, blue: 0.09)
-private let panelBg = Color.white.opacity(0.05)
+struct Theme {
+    let bgTop: Color
+    let bgBottom: Color
+    let accent: Color
+    let badgeBg: Color
+    let statusBarBg: Color
+    let isDark: Bool
+    let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
+}
+
+enum Skin: Int, CaseIterable, Identifiable {
+    case dark
+    case braun
+    case terminal
+
+    var id: Int { rawValue }
+
+    var name: String {
+        switch self {
+        case .dark: return "Dark (Default)"
+        case .braun: return "Braun Retro"
+        case .terminal: return "Terminal Green"
+        }
+    }
+
+    var theme: Theme {
+        switch self {
+        case .dark:
+            return Theme(
+                bgTop: Color(red: 0.10, green: 0.09, blue: 0.13),
+                bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
+                accent: Color(red: 0.93, green: 0.68, blue: 0.30),
+                badgeBg: Color.white.opacity(0.08),
+                statusBarBg: Color.black.opacity(0.25),
+                isDark: true,
+                physicalButtons: false)
+        case .braun:
+            // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮
+            return Theme(
+                bgTop: Color(red: 0.937, green: 0.929, blue: 0.902),
+                bgBottom: Color(red: 0.878, green: 0.867, blue: 0.831),
+                accent: Color(red: 0.875, green: 0.33, blue: 0.12),
+                badgeBg: Color.black.opacity(0.07),
+                statusBarBg: Color.black.opacity(0.06),
+                isDark: false,
+                physicalButtons: true)
+        case .terminal:
+            // 绿磷光终端
+            return Theme(
+                bgTop: Color(red: 0.04, green: 0.07, blue: 0.05),
+                bgBottom: Color(red: 0.02, green: 0.04, blue: 0.03),
+                accent: Color(red: 0.24, green: 0.94, blue: 0.45),
+                badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
+                statusBarBg: Color.black.opacity(0.3),
+                isDark: true,
+                physicalButtons: false)
+        }
+    }
+}
 
 // MARK: - 主界面
 
@@ -440,18 +501,20 @@ struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
 
+    private var theme: Theme { model.skin.theme }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
             nowPlaying
             transport
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
             playlistView
             statusBar
         }
         .background(
-            LinearGradient(colors: [bgTop, bgBottom], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [theme.bgTop, theme.bgBottom], startPoint: .top, endPoint: .bottom)
         )
         // 隐藏按钮承载方向键快进退快捷键
         .background(
@@ -462,23 +525,23 @@ struct ContentView: View {
             .opacity(0)
             .frame(width: 0, height: 0)
         )
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720, height: 560)
     }
 
-    // 顶栏: 标题 + 设备
+    // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
     private var header: some View {
         HStack {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 22))
-                .foregroundStyle(accent)
+                .foregroundStyle(theme.accent)
             Text("DSD Player")
                 .font(.headline)
             Text("DoP Bit-Perfect")
                 .font(.caption)
                 .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(accent.opacity(0.18))
-                .foregroundStyle(accent)
+                .background(theme.accent.opacity(0.18))
+                .foregroundStyle(theme.accent)
                 .clipShape(Capsule())
             Spacer()
             Picker("", selection: Binding(
@@ -503,6 +566,25 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .help("Refresh device list")
+            Menu {
+                ForEach(Skin.allCases) { skin in
+                    Button {
+                        model.skin = skin
+                    } label: {
+                        if skin == model.skin {
+                            Label(skin.name, systemImage: "checkmark")
+                        } else {
+                            Text(skin.name)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "paintbrush")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28)
+            .help("Skin")
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -542,7 +624,7 @@ struct ContentView: View {
                 onEditingChanged: { editing in
                     if !editing { model.seek(to: model.position) }
                 })
-                .tint(accent)
+                .tint(theme.accent)
                 .disabled(model.state == .idle)
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -563,11 +645,24 @@ struct ContentView: View {
             transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             Button { model.togglePlay() } label: {
-                Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 46))
-                    .foregroundStyle(accent)
+                if theme.physicalButtons {
+                    // 拟物大圆钮（博朗风格）
+                    Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(
+                            Circle()
+                                .fill(theme.accent)
+                                .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                        )
+                } else {
+                    Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 46))
+                        .foregroundStyle(theme.accent)
+                }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .disabled(model.playlist.isEmpty)
             .keyboardShortcut(.space, modifiers: [])
             transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
@@ -586,11 +681,19 @@ struct ContentView: View {
                                  help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: size))
-                .foregroundStyle(active ? accent : Color.primary.opacity(0.85))
-                .frame(width: 32, height: 32)
+                .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
+                .foregroundStyle(active ? theme.accent : Color.primary.opacity(0.85))
+                .frame(width: 36, height: 36)
+                .background {
+                    if theme.physicalButtons {
+                        Circle()
+                            .fill(theme.bgTop)
+                            .shadow(color: .black.opacity(0.3), radius: 2, y: 1.5)
+                            .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                    }
+                }
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .disabled(model.playlist.isEmpty)
         .help(help)
     }
@@ -609,7 +712,7 @@ struct ContentView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(accent)
+                .foregroundStyle(theme.accent)
             }
             .padding(.horizontal, 16).padding(.vertical, 8)
 
@@ -658,7 +761,7 @@ struct ContentView: View {
             if model.currentIndex == idx {
                 Image(systemName: model.state == .playing ? "waveform" : "pause")
                     .font(.caption)
-                    .foregroundStyle(accent)
+                    .foregroundStyle(theme.accent)
                     .frame(width: 18)
             } else {
                 Text("\(idx + 1)")
@@ -668,7 +771,7 @@ struct ContentView: View {
             }
             Text(item.title)
                 .lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(model.currentIndex == idx ? accent : .primary)
+                .foregroundStyle(model.currentIndex == idx ? theme.accent : .primary)
             Spacer()
             badge("DSD\(item.info.dsdMultiple)", small: true)
             Text(formatTime(item.info.durationSeconds))
@@ -706,15 +809,15 @@ struct ContentView: View {
         }
         .font(.caption)
         .padding(.horizontal, 16).padding(.vertical, 6)
-        .background(Color.black.opacity(0.25))
+        .background(theme.statusBarBg)
     }
 
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false) -> some View {
         Text(text)
             .font(small ? .caption2 : .caption)
             .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1 : 3)
-            .background(highlight ? accent.opacity(0.22) : Color.white.opacity(0.08))
-            .foregroundStyle(highlight ? accent : Color.primary.opacity(0.75))
+            .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
+            .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
