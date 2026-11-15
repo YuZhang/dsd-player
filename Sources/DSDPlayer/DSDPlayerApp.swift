@@ -568,7 +568,6 @@ struct ContentView: View {
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .frame(width: 720)
-        .frame(height: model.showPlaylist ? 560 : nil)
     }
 
     private var hasStatusContent: Bool {
@@ -589,16 +588,20 @@ struct ContentView: View {
     }
 
     /// 博朗风格冲孔纹理：深色孔 + 下缘高光模拟冲压斜面，避开控件区域
+    /// 水平方向对称布局：左右边缘留白相等
     private var dotGridTexture: some View {
         Canvas { ctx, size in
             let step: CGFloat = 15
             let d: CGFloat = 12
             let margin: CGFloat = 7   // 控件周围的无孔区
             let zones = holeFreeRects.map { $0.insetBy(dx: -margin, dy: -margin) }
+            // 列数按“边缘至少留 step”计算，起始位置使左右留白相等
+            let count = Int((size.width - 2 * step + (step - d)) / step)
+            let startX = (size.width - (step * CGFloat(count - 1) + d)) / 2
             var y: CGFloat = step
             while y < size.height {
-                var x: CGFloat = step
-                while x < size.width {
+                var x: CGFloat = startX
+                for _ in 0..<count {
                     let hole = CGRect(x: x, y: y, width: d, height: d)
                     if !zones.contains(where: { $0.intersects(hole) }) {
                         // 下缘高光（先画，被孔遮住上半部分，露出下缘）
@@ -727,14 +730,14 @@ struct ContentView: View {
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 32)
             .holeFreeZone()
+            .padding(.horizontal, 32)   // 避让区只含内容，padding 区域可显示冲孔
 
             // VU 电平表（立体声分段条，收窄）
             VUMeter(left: model.meterL, right: model.meterR, theme: theme)
                 .padding(.top, 2)
-                .padding(.horizontal, 32)
                 .holeFreeZone()
+                .padding(.horizontal, 32)
         }
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
@@ -785,7 +788,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(.top, 6)
-        .padding(.bottom, 16)   // 留出空间让最下一行冲孔完整显示
+        .padding(.bottom, 54)   // 播放按钮下方完整露出 3 行冲孔
     }
 
     private func transportButton(_ icon: String, size: CGFloat, active: Bool = false,
@@ -853,9 +856,10 @@ struct ContentView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .frame(height: 352)   // 固定高度：恰好 10 首
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             for p in providers {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
