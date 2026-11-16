@@ -231,7 +231,7 @@ final class DSDPlayerTests: XCTestCase {
         for skin in Skin.allCases {
             XCTAssertEqual(Skin(rawValue: skin.rawValue), skin)
             let t = skin.theme
-            _ = t.bgTop; _ = t.bgBottom; _ = t.accent; _ = t.badgeBg; _ = t.statusBarBg
+            _ = t.bgTop; _ = t.bgBottom; _ = t.accent; _ = t.badgeBg
             XCTAssertFalse(skin.name.isEmpty)
         }
         XCTAssertNil(Skin(rawValue: 99))  // 非法值安全返回 nil
