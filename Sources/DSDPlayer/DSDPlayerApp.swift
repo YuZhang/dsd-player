@@ -544,6 +544,7 @@ struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
     @State private var holeFreeRects: [CGRect] = []
+    @State private var activeWarning: String?   // 非 nil 时弹告警窗
 
     private var theme: Theme { model.skin.theme }
 
@@ -588,6 +589,19 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        // 告警：出现新告警时弹窗（顶栏不再有常驻告警图标）；
+        // onAppear 兜底处理启动时（视图挂载前）就存在的告警
+        .onChange(of: model.warningText) { _, new in
+            if let new { activeWarning = new }
+        }
+        .onAppear { activeWarning = model.warningText }
+        .alert("Warning", isPresented: Binding(
+            get: { activeWarning != nil },
+            set: { if !$0 { activeWarning = nil } })) {
+            Button("OK") { activeWarning = nil }
+        } message: {
+            Text(activeWarning ?? "")
+        }
         // 退出 App 时停止引擎：释放独占并恢复被 DoP 强制为 1.0 的音量
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             model.engine.stop()
@@ -667,14 +681,6 @@ struct ContentView: View {
             .frame(width: 130)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
-            // 告警图标：固定占位，有告警时显示，悬停查看详情（不影响其他控件位置）
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .opacity(model.warningText != nil ? 1 : 0)
-                .allowsHitTesting(model.warningText != nil)
-                .help(model.warningText ?? "")
-                .frame(width: 18)
-                .holeFreeZone()
             Menu {
                 ForEach(model.devices) { dev in
                     Button {
