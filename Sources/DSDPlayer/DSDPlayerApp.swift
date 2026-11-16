@@ -543,45 +543,45 @@ struct ContentView: View {
     private var theme: Theme { model.skin.theme }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // 整个窗口（含标题栏）共用同一背景：与面板同一个颜色来源
+        VStack(spacing: 0) {
+            // 上部面板：正文正常布局，不做任何手动补偿
+            VStack(spacing: 0) {
+                header
+                nowPlaying
+                transport
+            }
+            .background(faceplateBackground)
+            if model.showPlaylist {
+                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                playlistView
+                    .background(theme.bgBottom)   // 不透明盖住冲孔
+            }
+        }
+        .coordinateSpace(name: "root")
+        .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
+        // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
+        .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
+        // 背景负责延伸进标题栏（仅背景忽略顶部安全区，正文保持正常布局）；
+        // 背景不参与内容尺寸计算，窗口保持固定不可拖大
+        .background {
             Group {
                 if theme.dotGrid {
                     holeCanvas
                 } else {
-                    theme.bgTop
+                    theme.bgTop   // 与面板同一个颜色来源
                 }
             }
-            .ignoresSafeArea(.container, edges: .top)   // 只有背景进入安全区
-
-            // 正文：正常布局，不做任何手动补偿
-            VStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    header
-                    nowPlaying
-                    transport
-                }
-                .coordinateSpace(name: "faceplate")
-                .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
-                .background(faceplateBackground)
-                if model.showPlaylist {
-                    Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
-                    playlistView
-                        .background(theme.bgBottom)   // 不透明盖住冲孔
-                }
-            }
-            // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
-            .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
-            // 隐藏按钮承载方向键快进退快捷键
-            .background(
-                HStack {
-                    Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
-                    Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
-                }
-                .opacity(0)
-                .frame(width: 0, height: 0)
-            )
+            .ignoresSafeArea(.container, edges: .top)
         }
+        // 隐藏按钮承载方向键快进退快捷键
+        .background(
+            HStack {
+                Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
+                Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        )
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
@@ -591,8 +591,8 @@ struct ContentView: View {
     /// 冲孔画布：面板色 + 冲孔铺满整个窗口（含标题栏），播放列表区域由列表自己的不透明底色盖住
     private var holeCanvas: some View {
         GeometryReader { geo in
-            // 画布与面板坐标系的偏移（画布顶在窗口顶，面板顶在安全区下）
-            let offsetY = geo.frame(in: .named("faceplate")).minY
+            // 画布与 root 坐标系的偏移（画布顶在窗口顶，内容顶在安全区下）
+            let offsetY = geo.frame(in: .named("root")).minY
             Canvas { ctx, size in
                 ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.bgTop))
                 // 只在紧凑布局（收起播放列表）时绘制冲孔
@@ -946,7 +946,7 @@ extension View {
     func holeFreeZone() -> some View {
         background(GeometryReader { geo in
             Color.clear.preference(key: HoleFreeRectKey.self,
-                                   value: [geo.frame(in: .named("faceplate"))])
+                                   value: [geo.frame(in: .named("root"))])
         })
     }
 }
