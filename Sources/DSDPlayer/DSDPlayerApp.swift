@@ -276,9 +276,14 @@ final class PlayerModel: ObservableObject {
         outputMode = mode
         engine.outputMode = mode
         persist()
-        // 播放中切换：从头重播当前曲目以应用新模式
+        // 播放/暂停中切换：保持当前位置续播（而不是从头重播）
         if state == .playing || state == .paused, let idx = currentIndex {
+            let wasPaused = state == .paused
+            let pos = engine.positionSeconds
             play(at: idx)
+            guard statusMessage.isEmpty else { return }   // 启动失败则不 seek
+            seek(to: pos)
+            if wasPaused { engine.pause() }
         }
     }
 
