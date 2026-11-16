@@ -162,7 +162,10 @@ final class PlaybackEngine: @unchecked Sendable {
         guard state == .playing, let au = audioUnit else { return }
         AudioOutputUnitStop(au)
         // 暂停即释放设备独占，让其他应用可以使用 DAC；恢复播放时重新配置
-        if deviceID != 0 { AudioDeviceManager.releaseHogMode(deviceID) }
+        if deviceID != 0 {
+            AudioDeviceManager.releaseHogMode(deviceID)
+            AudioDeviceManager.restoreVolume(deviceID)   // 恢复 DoP 强制 1.0 前的音量
+        }
         state = .paused
     }
 
@@ -214,6 +217,7 @@ final class PlaybackEngine: @unchecked Sendable {
         }
         if deviceID != 0 {
             AudioDeviceManager.releaseHogMode(deviceID)
+            AudioDeviceManager.restoreVolume(deviceID)   // 恢复 DoP 强制 1.0 前的音量
             deviceID = 0
         }
         ring.clear()

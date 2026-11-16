@@ -196,16 +196,31 @@ enum AudioDeviceManager {
                                        UInt32(MemoryLayout<Float64>.size), &rate)
         }
 
-        // DoP 要求位元直通：设备音量必须为 1.0 且取消静音，
-        // 否则 HAL 的音量乘法/静音会破坏标记字节，DAC 无法进入 DSD 模式。
-        // PCM 模式下保留用户音量设置。
-        guard bitPerfect else { return }
+        guard bitPerfect else { return }   // PCM 模式下保留用户音量设置
+        forceBitPerfectVolume(device)
+    }
+
+    // MARK: 音量保存 / 恢复（DoP 强制 1.0 后恢复原音量）
+
+    // 仅从主线程的 play/pause/stop 路径访问，无并发写
+    private nonisolated(unsafe) static var savedVolumes: [AudioDeviceID: [(UInt32, Float32)]] = [:]
+
+    /// DoP 要求位元直通：设备音量必须为 1.0 且取消静音，
+    /// 否则 HAL 的音量乘法/静音会破坏标记字节，DAC 无法进入 DSD 模式。
+    /// 修改前保存原音量，供 restoreVolume 恢复。
+    private static func forceBitPerfectVolume(_ device: AudioDeviceID) {
+        var saved: [(UInt32, Float32)] = []
         for element: UInt32 in [0, 1, 2] {
             var volAddr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeOutput,
                 mElement: element)
             if AudioObjectHasProperty(device, &volAddr) {
+                var cur = Float32(1)
+                var sz = UInt32(MemoryLayout<Float32>.size)
+                if AudioObjectGetPropertyData(device, &volAddr, 0, nil, &sz, &cur) == noErr {
+                    saved.append((element, cur))
+                }
                 var one = Float32(1.0)
                 AudioObjectSetPropertyData(device, &volAddr, 0, nil,
                                            UInt32(MemoryLayout<Float32>.size), &one)
@@ -219,6 +234,21 @@ enum AudioDeviceManager {
                 AudioObjectSetPropertyData(device, &muteAddr, 0, nil,
                                            UInt32(MemoryLayout<UInt32>.size), &zero)
             }
+        }
+        if !saved.isEmpty { savedVolumes[device] = saved }
+    }
+
+    /// 恢复进入 DoP 前保存的音量（stop/pause 时调用）
+    static func restoreVolume(_ device: AudioDeviceID) {
+        guard let saved = savedVolumes.removeValue(forKey: device) else { return }
+        for (element, value) in saved {
+            var volAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: element)
+            var v = value
+            AudioObjectSetPropertyData(device, &volAddr, 0, nil,
+                                       UInt32(MemoryLayout<Float32>.size), &v)
         }
     }
 

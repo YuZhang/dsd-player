@@ -588,6 +588,10 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        // 退出 App 时停止引擎：释放独占并恢复被 DoP 强制为 1.0 的音量
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            model.engine.stop()
+        }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
         .frame(width: 720)
         .background(WindowConfigurator())   // 标题栏完全透明
