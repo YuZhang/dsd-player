@@ -666,40 +666,54 @@ struct ContentView: View {
                 .help(model.warningText ?? "")
                 .frame(width: 18)
                 .holeFreeZone()
-            Picker("", selection: $model.selectedDevice) {
+            Menu {
                 ForEach(model.devices) { dev in
-                    Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
-                }
-            }
-            .labelsHidden()
-            .frame(maxWidth: 240)
-            .holeFreeZone()
-            HStack(spacing: 12) {
-                Button { model.refreshDevices() } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh device list")
-                Menu {
-                    ForEach(Skin.allCases) { skin in
-                        Button {
-                            model.skin = skin
-                        } label: {
-                            if skin == model.skin {
-                                Label(skin.name, systemImage: "checkmark")
-                            } else {
-                                Text(skin.name)
-                            }
+                    Button {
+                        model.selectedDevice = dev
+                    } label: {
+                        let name = dev.name + (dev.isUSB ? " ⚡" : "")
+                        if dev == model.selectedDevice {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
                         }
                     }
-                } label: {
-                    Image(systemName: "tshirt")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 28)
-                .help("Skin")
+                Divider()
+                Button("Refresh Devices") { model.refreshDevices() }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(model.selectedDevice?.name ?? "No Device")
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: 240)
+            .holeFreeZone()
+            Menu {
+                ForEach(Skin.allCases) { skin in
+                    Button {
+                        model.skin = skin
+                    } label: {
+                        if skin == model.skin {
+                            Label(skin.name, systemImage: "checkmark")
+                        } else {
+                            Text(skin.name)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "tshirt")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28)
+            .help("Skin")
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
