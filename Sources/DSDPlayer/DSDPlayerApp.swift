@@ -733,13 +733,14 @@ struct ContentView: View {
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(theme.isDark
-                          ? Color.white.opacity(deviceHover ? 0.16 : 0.08)
-                          : Color.black.opacity(deviceHover ? 0.12 : 0.06))
+                          ? Color.white.opacity(deviceHover ? 0.28 : 0.16)
+                          : Color.black.opacity(deviceHover ? 0.16 : 0.08))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(theme.isDark ? Color.white.opacity(0.14)
-                                         : Color.black.opacity(0.14), lineWidth: 0.5)
+                    .stroke(theme.isDark ? Color.white.opacity(deviceHover ? 0.5 : 0.3)
+                                         : Color.black.opacity(deviceHover ? 0.4 : 0.22),
+                            lineWidth: 1)
             )
             .animation(.easeOut(duration: 0.15), value: deviceHover)
             .frame(maxWidth: 240)
