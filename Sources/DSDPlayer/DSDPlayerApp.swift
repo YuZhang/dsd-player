@@ -554,6 +554,7 @@ enum Skin: Int, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
+    @State private var anchorIndex: Int?   // Shift 范围选择的锚点
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
 
@@ -590,11 +591,12 @@ struct ContentView: View {
             }
             .ignoresSafeArea(.container, edges: .top)
         }
-        // 隐藏按钮承载方向键快进退快捷键
+        // 隐藏按钮承载快捷键：方向键快进退、Delete 删除选中曲目
         .background(
             HStack {
                 Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
+                Button("") { removeSelection() }.keyboardShortcut(.delete, modifiers: [])
             }
             .opacity(0)
             .frame(width: 0, height: 0)
@@ -897,14 +899,24 @@ struct ContentView: View {
                         playlistRow(idx: idx, item: item)
                             .tag(item.id)
                             .contextMenu {
-                                Button("Remove") {
-                                    if let i = model.playlist.firstIndex(of: item) {
-                                        model.remove(at: IndexSet(integer: i))
+                                if selection.contains(item.id), selection.count > 1 {
+                                    Button("Remove \(selection.count) Tracks") { removeSelection() }
+                                } else {
+                                    Button("Remove") {
+                                        if let i = model.playlist.firstIndex(of: item) {
+                                            model.remove(at: IndexSet(integer: i))
+                                        }
+                                        selection = []
+                                        anchorIndex = nil
                                     }
                                 }
                             }
                     }
-                    .onDelete { model.remove(at: $0) }
+                    .onDelete {
+                        model.remove(at: $0)
+                        selection = []
+                        anchorIndex = nil
+                    }
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
@@ -949,7 +961,32 @@ struct ContentView: View {
         .frame(height: 30)   // 固定行高，列表高度 = 10 行 × 32pt
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
-        .onTapGesture(count: 1) { selection = [item.id] }
+        .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
+    }
+
+    /// 单击选择：普通点击单选；⌘点击切换加选/取消；⇧点击从锚点范围选择
+    private func handleSelect(idx: Int, item: PlaylistItem) {
+        let mods = NSEvent.modifierFlags
+        if mods.contains(.command) {
+            if selection.contains(item.id) { selection.remove(item.id) } else { selection.insert(item.id) }
+            anchorIndex = idx
+        } else if mods.contains(.shift), let anchor = anchorIndex,
+                  model.playlist.indices.contains(anchor) {
+            let range = min(anchor, idx)...max(anchor, idx)
+            selection = Set(range.map { model.playlist[$0].id })
+        } else {
+            selection = [item.id]
+            anchorIndex = idx
+        }
+    }
+
+    /// 删除所有选中的曲目
+    private func removeSelection() {
+        guard !selection.isEmpty else { return }
+        let idxs = IndexSet(model.playlist.indices.filter { selection.contains(model.playlist[$0].id) })
+        model.remove(at: idxs)
+        selection = []
+        anchorIndex = nil
     }
 
     private func channelLabel(_ count: Int) -> String {
