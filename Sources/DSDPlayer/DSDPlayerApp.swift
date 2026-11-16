@@ -163,6 +163,17 @@ final class PlayerModel: ObservableObject {
         }
         setupRemoteCommands()
         restore()
+        applyLaunchDevicePolicy()
+    }
+
+    /// 启动设备策略：有 USB DAC 时选它并用 DoP 位元直通，否则用 PCM 模式（任意设备可用）
+    private func applyLaunchDevicePolicy() {
+        if let usb = devices.first(where: { $0.isUSB }) {
+            selectedDevice = usb
+            setOutputMode(.dop)
+        } else {
+            setOutputMode(.pcm)
+        }
     }
 
     private func tick() {
