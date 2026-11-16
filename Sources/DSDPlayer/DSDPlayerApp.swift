@@ -557,6 +557,7 @@ struct ContentView: View {
     @State private var anchorIndex: Int?   // Shift 范围选择的锚点
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
+    @State private var deviceHover = false
 
     private var theme: Theme { model.skin.theme }
 
@@ -694,33 +695,53 @@ struct ContentView: View {
             .frame(width: 130)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
-            Menu {
-                ForEach(model.devices) { dev in
-                    Button {
-                        model.selectedDevice = dev
-                    } label: {
-                        let name = dev.name + (dev.isUSB ? " ⚡" : "")
-                        if dev == model.selectedDevice {
-                            Label(name, systemImage: "checkmark")
-                        } else {
-                            Text(name)
+            // 胶囊底：与分段控件一致地暗示"可点击"；悬停加深。
+            // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
+            HStack(spacing: 0) {
+                Menu {
+                    ForEach(model.devices) { dev in
+                        Button {
+                            model.selectedDevice = dev
+                        } label: {
+                            let name = dev.name + (dev.isUSB ? " ⚡" : "")
+                            if dev == model.selectedDevice {
+                                Label(name, systemImage: "checkmark")
+                            } else {
+                                Text(name)
+                            }
                         }
                     }
+                    Divider()
+                    Button("Refresh Devices") { model.refreshDevices() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(model.selectedDevice?.name ?? "No Device")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                 }
-                Divider()
-                Button("Refresh Devices") { model.refreshDevices() }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(model.selectedDevice?.name ?? "No Device")
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .onHover { deviceHover = $0 }
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(theme.isDark
+                          ? Color.white.opacity(deviceHover ? 0.16 : 0.08)
+                          : Color.black.opacity(deviceHover ? 0.12 : 0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(theme.isDark ? Color.white.opacity(0.14)
+                                         : Color.black.opacity(0.14), lineWidth: 0.5)
+            )
+            .animation(.easeOut(duration: 0.15), value: deviceHover)
             .frame(maxWidth: 240)
             .holeFreeZone()
             Menu {
