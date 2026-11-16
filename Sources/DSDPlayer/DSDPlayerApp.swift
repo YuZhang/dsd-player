@@ -729,6 +729,7 @@ struct ContentView: View {
             .menuIndicator(.hidden)
             .frame(width: 28)
             .help("Skin")
+            .hoverBrightness()
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
@@ -746,16 +747,19 @@ struct ContentView: View {
                 .holeFreeZone()
 
             if let info = model.currentInfo {
-                HStack(spacing: 8) {
-                    badge(info.formatName)
-                    badge("DSD\(info.dsdMultiple)")
-                    badge(String(format: "%.1f MHz", Double(info.dsdSampleRate) / 1e6))
-                    badge("\(info.channelCount)ch")
-                    badge(model.outputMode == .dop
-                          ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
-                          : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz",
-                          highlight: true)
+                // 信号链：源规格 → 输出方式与载波率
+                HStack(spacing: 6) {
+                    Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                    Text(model.outputMode == .dop
+                         ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
+                         : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
+                        .foregroundStyle(theme.accent)
                 }
+                .font(.caption.monospacedDigit())
                 .holeFreeZone()
             } else {
                 Text("Add .dsf / .dff files to start playing")
@@ -797,13 +801,17 @@ struct ContentView: View {
         HStack {
             Spacer()
             HStack(spacing: 28) {
-                transportButton(model.playMode.icon, size: 18,
+                TransportButton(icon: model.playMode.icon, size: 18, theme: theme,
                                 active: model.playMode != .sequential,
-                                help: model.playMode.label) {
+                                help: model.playMode.label,
+                                enabled: !model.playlist.isEmpty) {
                     model.playMode = model.playMode.next()
                 }
-                transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
+                TransportButton(icon: "backward.fill", size: 22, theme: theme,
+                                help: "Previous (⌘←)",
+                                enabled: !model.playlist.isEmpty) { model.previous() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
+                // 播放/暂停主按钮
                 Button { model.togglePlay() } label: {
                     if theme.physicalButtons {
                         // 拟物大圆钮（博朗风格）
@@ -822,15 +830,19 @@ struct ContentView: View {
                             .foregroundStyle(theme.accent)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressScaleStyle())
                 .disabled(model.playlist.isEmpty)
                 .keyboardShortcut(.space, modifiers: [])
-                transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
+                .hoverBrightness()
+                TransportButton(icon: "forward.fill", size: 22, theme: theme,
+                                help: "Next (⌘→)",
+                                enabled: !model.playlist.isEmpty) { model.next() }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
                 // 列表显隐
-                transportButton("list.bullet", size: 18,
+                TransportButton(icon: "list.bullet", size: 18, theme: theme,
                                 active: model.showPlaylist,
-                                help: model.showPlaylist ? "Hide Playlist" : "Show Playlist") {
+                                help: model.showPlaylist ? "Hide Playlist" : "Show Playlist",
+                                enabled: true) {
                     model.showPlaylist.toggle()
                 }
             }
@@ -839,27 +851,6 @@ struct ContentView: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 30)   // 播放按钮下方 1 行冲孔 + 正常边距
-    }
-
-    private func transportButton(_ icon: String, size: CGFloat, active: Bool = false,
-                                 help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
-                .foregroundStyle(active ? theme.accent : Color.primary.opacity(0.85))
-                .frame(width: 36, height: 36)
-                .background {
-                    if theme.physicalButtons {
-                        Circle()
-                            .fill(theme.bgTop)
-                            .shadow(color: .black.opacity(0.3), radius: 2, y: 1.5)
-                            .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .disabled(model.playlist.isEmpty)
-        .help(help)
     }
 
     // 播放列表
@@ -950,6 +941,14 @@ struct ContentView: View {
         .onTapGesture(count: 1) { selection = [item.id] }
     }
 
+    private func channelLabel(_ count: Int) -> String {
+        switch count {
+        case 1: return "Mono"
+        case 2: return "Stereo"
+        default: return "\(count)ch"
+        }
+    }
+
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false) -> some View {
         Text(text)
             .font(small ? .caption2 : .caption)
@@ -957,6 +956,72 @@ struct ContentView: View {
             .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
             .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 按钮交互反馈
+
+/// 按下缩放动画（所有可点按钮通用）
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// 悬停增亮（用于播放主按钮等大图标）
+extension View {
+    func hoverBrightness() -> some View { modifier(HoverBrightness()) }
+}
+
+private struct HoverBrightness: ViewModifier {
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    func body(content: Content) -> some View {
+        content
+            .brightness(hovering && isEnabled ? 0.18 : 0)
+            .animation(.easeOut(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// 传输控制按钮：悬停时非拟物皮肤显示圆形底、拟物皮肤加深阴影；按下缩放
+struct TransportButton: View {
+    let icon: String
+    var size: CGFloat
+    let theme: Theme
+    var active: Bool = false
+    var help: String = ""
+    var enabled: Bool = true
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
+                .foregroundStyle(active ? theme.accent : Color.primary.opacity(hovering ? 1.0 : 0.85))
+                .frame(width: 36, height: 36)
+                .background {
+                    if theme.physicalButtons {
+                        Circle()
+                            .fill(theme.bgTop)
+                            .shadow(color: .black.opacity(hovering ? 0.42 : 0.3),
+                                    radius: hovering ? 3 : 2, y: hovering ? 2 : 1.5)
+                            .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                    } else if hovering {
+                        Circle().fill(theme.badgeBg)
+                    }
+                }
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .help(help)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 
