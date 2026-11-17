@@ -656,7 +656,7 @@ struct ContentView: View {
             model.engine.stop()
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
-        .frame(width: 640)
+        .frame(width: 560)
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
@@ -749,14 +749,14 @@ struct ContentView: View {
                             Spacer(minLength: 0)   // 内容靠左，右侧留白
                         }
                         .padding(.horizontal, 4)
-                        .frame(width: 184, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
+                        .frame(width: 164, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
                         .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .onHover { deviceHover = $0 }
                 }
-                .frame(width: 184, height: 28)   // 固定宽度：设备名变化不跳动
+                .frame(width: 164, height: 28)   // 固定宽度：设备名变化不跳动
                 .background(
                     RoundedRectangle(cornerRadius: 8)
                         .fill(theme.isDark
@@ -1081,7 +1081,7 @@ struct ContentView: View {
     }
 
     /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
-    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 108) -> String {
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 92) -> String {
         let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
