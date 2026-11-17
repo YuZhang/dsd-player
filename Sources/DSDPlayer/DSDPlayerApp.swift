@@ -623,12 +623,16 @@ struct ContentView: View {
             }
             .ignoresSafeArea(.container, edges: .top)
         }
-        // 隐藏按钮承载快捷键：方向键快进退、Delete 删除选中曲目
+        // 隐藏按钮承载快捷键：方向键快进退、Delete 删除选中、上下键移动选择
         .background(
             HStack {
                 Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
                 Button("") { removeSelection() }.keyboardShortcut(.delete, modifiers: [])
+                Button("") { moveSelection(-1, extend: false) }.keyboardShortcut(.upArrow, modifiers: [])
+                Button("") { moveSelection(1, extend: false) }.keyboardShortcut(.downArrow, modifiers: [])
+                Button("") { moveSelection(-1, extend: true) }.keyboardShortcut(.upArrow, modifiers: .shift)
+                Button("") { moveSelection(1, extend: true) }.keyboardShortcut(.downArrow, modifiers: .shift)
             }
             .opacity(0)
             .frame(width: 0, height: 0)
@@ -948,33 +952,34 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $selection) {
-                    ForEach(Array(model.playlist.enumerated()), id: \.element.id) { idx, item in
-                        playlistRow(idx: idx, item: item)
-                            .tag(item.id)
-                            .contextMenu {
-                                if selection.contains(item.id), selection.count > 1 {
-                                    Button("Remove \(selection.count) Tracks") { removeSelection() }
-                                } else {
-                                    Button("Remove") {
-                                        if let i = model.playlist.firstIndex(of: item) {
-                                            model.remove(at: IndexSet(integer: i))
+                // 自绘选中高亮（主题强调色），不用 List 的系统蓝
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(model.playlist.enumerated()), id: \.element.id) { idx, item in
+                            playlistRow(idx: idx, item: item)
+                                .contextMenu {
+                                    if selection.contains(item.id), selection.count > 1 {
+                                        Button("Remove \(selection.count) Tracks") { removeSelection() }
+                                    } else {
+                                        Button("Remove") {
+                                            if let i = model.playlist.firstIndex(of: item) {
+                                                model.remove(at: IndexSet(integer: i))
+                                            }
+                                            selection = []
+                                            anchorIndex = nil
                                         }
-                                        selection = []
-                                        anchorIndex = nil
                                     }
                                 }
+                            if idx < model.playlist.count - 1 {
+                                Divider()
+                                    .overlay(theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08))
+                                    .padding(.leading, 36)
                             }
+                        }
                     }
-                    .onDelete {
-                        model.remove(at: $0)
-                        selection = []
-                        anchorIndex = nil
-                    }
+                    .padding(.horizontal, 8)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .frame(height: 400)   // 固定高度：恰好 10 首（实测行距 39.7pt）
+                .frame(height: 400)   // 固定高度：恰好 10 首
             }
         }
         .frame(maxWidth: .infinity)
@@ -990,29 +995,39 @@ struct ContentView: View {
     }
 
     private func playlistRow(idx: Int, item: PlaylistItem) -> some View {
-        HStack(spacing: 10) {
-            if model.currentIndex == idx {
+        let isSelected = selection.contains(item.id)
+        let isCurrent = model.currentIndex == idx
+        // 选中底上的对比文字色：深色皮肤用深字，浅色皮肤用白字
+        let onAccent: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        return HStack(spacing: 10) {
+            if isCurrent {
                 Image(systemName: model.state == .playing ? "waveform" : "pause")
                     .font(.caption)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(isSelected ? onAccent : theme.accent)
                     .frame(width: 18)
             } else {
                 Text("\(idx + 1)")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? onAccent.opacity(0.7) : .secondary)
                     .frame(width: 18)
             }
             Text(item.title)
                 .lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(model.currentIndex == idx ? theme.accent : .primary)
+                .foregroundStyle(isSelected ? onAccent : (isCurrent ? theme.accent : .primary))
             Spacer()
-            badge("DSD\(item.info.dsdMultiple)", small: true)
+            badge("DSD\(item.info.dsdMultiple)", small: true, onAccent: isSelected)
             Text(formatTime(item.info.durationSeconds))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? onAccent.opacity(0.7) : .secondary)
                 .frame(width: 52, alignment: .trailing)
         }
-        .frame(height: 30)   // 固定行高，列表高度 = 10 行 × 32pt
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? theme.accent.opacity(0.9) : Color.clear)
+        )
+        .frame(height: 34)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
@@ -1034,6 +1049,20 @@ struct ContentView: View {
         }
     }
 
+    /// 键盘上下移动选择；Shift 从锚点扩展
+    private func moveSelection(_ delta: Int, extend: Bool) {
+        guard !model.playlist.isEmpty else { return }
+        let cur = anchorIndex ?? model.currentIndex ?? (delta > 0 ? -1 : 0)
+        let next = max(0, min(model.playlist.count - 1, cur + delta))
+        if extend {
+            let range = min(cur, next)...max(cur, next)
+            selection = Set(range.map { model.playlist[$0].id })
+        } else {
+            selection = [model.playlist[next].id]
+            anchorIndex = next
+        }
+    }
+
     /// 删除所有选中的曲目
     private func removeSelection() {
         guard !selection.isEmpty else { return }
@@ -1051,12 +1080,17 @@ struct ContentView: View {
         }
     }
 
-    private func badge(_ text: String, highlight: Bool = false, small: Bool = false) -> some View {
-        Text(text)
+    private func badge(_ text: String, highlight: Bool = false, small: Bool = false,
+                       onAccent: Bool = false) -> some View {
+        let onAccentText: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        return Text(text)
             .font(small ? .caption2 : .caption)
             .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1 : 3)
-            .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
-            .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
+            .background(onAccent
+                        ? (theme.isDark ? Color.black.opacity(0.25) : Color.white.opacity(0.25))
+                        : (highlight ? theme.accent.opacity(0.22) : theme.badgeBg))
+            .foregroundStyle(onAccent ? onAccentText
+                             : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
