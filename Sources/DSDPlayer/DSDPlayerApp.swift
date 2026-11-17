@@ -748,7 +748,7 @@ struct ContentView: View {
                                 .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
                             Spacer(minLength: 0)   // 内容靠左，右侧留白
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 4)
                         .frame(width: 184, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
                         .contentShape(Rectangle())
                     }
