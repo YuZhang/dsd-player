@@ -2,3 +2,8 @@
 .DS_Store
 *.xcuserstate
 xcuserdata/
+
+# 测试样本（大文件，不入库）
+sacd_sample.iso
+sacd_sample.xml
+*.dmg

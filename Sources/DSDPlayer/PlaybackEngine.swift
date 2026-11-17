@@ -73,8 +73,11 @@ final class PlaybackEngine: @unchecked Sendable {
     // MARK: 加载
 
     func load(url: URL) throws {
+        try load(source: DSDFile.open(url))
+    }
+
+    func load(source src: DSDSource) throws {
         stop()
-        let src = try DSDFile.open(url)
         feederLock.lock()
         source = src
         carrierRate.store(outputRate(for: src), ordering: .relaxed)

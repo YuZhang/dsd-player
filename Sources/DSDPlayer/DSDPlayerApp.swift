@@ -50,7 +50,22 @@ struct PlaylistItem: Identifiable, Hashable {
     let id = UUID()
     let url: URL
     let info: DSDInfo
-    var title: String { url.deletingPathExtension().lastPathComponent }
+    let isoTrackIndex: Int?   // 非 nil：SACD ISO 内的第 N 首（url 指向 ISO 文件）
+    let title: String
+
+    init(url: URL, info: DSDInfo) {
+        self.url = url
+        self.info = info
+        self.isoTrackIndex = nil
+        self.title = url.deletingPathExtension().lastPathComponent
+    }
+
+    init(isoURL: URL, info: DSDInfo, trackIndex: Int, title: String) {
+        self.url = isoURL
+        self.info = info
+        self.isoTrackIndex = trackIndex
+        self.title = title
+    }
 }
 
 // MARK: - 播放模型
@@ -85,6 +100,28 @@ final class PlayerModel: ObservableObject {
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
     private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
+    private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径）
+
+    /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource
+    func openSource(for item: PlaylistItem) -> DSDSource? {
+        if let trackIdx = item.isoTrackIndex {
+            do {
+                let path = item.url.path
+                let iso: SacdISO
+                if let cached = isoCache[path] {
+                    iso = cached
+                } else {
+                    iso = try SacdISO(url: item.url)
+                    isoCache[path] = iso
+                }
+                return try iso.makeTrackSource(iso.album.tracks[trackIdx])
+            } catch {
+                statusMessage = error.localizedDescription
+                return nil
+            }
+        }
+        return try? DSDFile.open(item.url)
+    }
 
     // MARK: 持久化
 
@@ -93,7 +130,7 @@ final class PlayerModel: ObservableObject {
 
     private func persist() {
         guard !isRestoring else { return }
-        let saved = SavedState(paths: playlist.map { $0.url.path },
+        let saved = SavedState(paths: playlist.map { $0.url.path + ($0.isoTrackIndex.map { "#track=\($0)" } ?? "") },
                                currentIndex: currentIndex,
                                playMode: playMode.rawValue,
                                outputMode: outputMode.rawValue,
@@ -118,6 +155,24 @@ final class PlayerModel: ObservableObject {
         var items: [PlaylistItem] = []
         var missing = 0
         for path in saved.paths {
+            // ISO 曲目条目："iso路径#track=N"
+            if let range = path.range(of: "#track="), let idx = Int(path[range.upperBound...]) {
+                let isoPath = String(path[..<range.lowerBound])
+                guard FileManager.default.fileExists(atPath: isoPath) else { missing += 1; continue }
+                do {
+                    let iso: SacdISO
+                    if let cached = isoCache[isoPath] { iso = cached }
+                    else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); isoCache[isoPath] = iso }
+                    let t = iso.album.tracks[idx]
+                    let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
+                                       channelCount: iso.album.channelCount,
+                                       totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
+                    items.append(PlaylistItem(isoURL: URL(fileURLWithPath: isoPath), info: info,
+                                              trackIndex: idx,
+                                              title: t.title.isEmpty ? "Track \(t.index + 1)" : t.title))
+                } catch { missing += 1 }
+                continue
+            }
             let url = URL(fileURLWithPath: path)
             guard FileManager.default.fileExists(atPath: path),
                   let src = try? DSDFile.open(url) else { missing += 1; continue }
@@ -243,7 +298,7 @@ final class PlayerModel: ObservableObject {
         }
         queuedNextIndex = nextIdx
         if let ni = nextIdx {
-            engine.setNext(try? DSDFile.open(playlist[ni].url))
+            engine.setNext(openSource(for: playlist[ni]))
         } else {
             engine.setNext(nil)
         }
@@ -334,15 +389,16 @@ final class PlayerModel: ObservableObject {
         let panel = NSOpenPanel()
         let dsfType = UTType(filenameExtension: "dsf") ?? .data
         let dffType = UTType(filenameExtension: "dff") ?? .data
-        panel.allowedContentTypes = [dsfType, dffType]
+        let isoType = UTType(filenameExtension: "iso") ?? .data
+        panel.allowedContentTypes = [dsfType, dffType, isoType]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose DSD audio files (.dsf / .dff) — multiple selection allowed"
+        panel.message = "Choose DSD audio files (.dsf / .dff) or SACD ISO — multiple selection allowed"
         guard panel.runModal() == .OK else { return }
         add(urls: panel.urls)
     }
 
     func add(urls: [URL]) {
-        // 展开文件夹：递归收集其中的 DSD 文件
+        // 展开文件夹：递归收集其中的 DSD / ISO 文件
         var files: [URL] = []
         for url in urls {
             var isDir: ObjCBool = false
@@ -350,12 +406,12 @@ final class PlayerModel: ObservableObject {
                 if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
                     for case let f as URL in enumerator {
                         let ext = f.pathExtension.lowercased()
-                        if ext == "dsf" || ext == "dff" { files.append(f) }
+                        if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(f) }
                     }
                 }
             } else {
                 let ext = url.pathExtension.lowercased()
-                if ext == "dsf" || ext == "dff" { files.append(url) }
+                if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(url) }
             }
         }
         // 按路径自然排序，保证专辑曲序（01、02…）
@@ -364,6 +420,24 @@ final class PlayerModel: ObservableObject {
         var added: [PlaylistItem] = []
         var failures: [String] = []
         for url in files {
+            if url.pathExtension.lowercased() == "iso" {
+                // SACD ISO：展开为曲目列表
+                do {
+                    let iso = try SacdISO(url: url)
+                    isoCache[url.path] = iso
+                    for t in iso.album.tracks {
+                        let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
+                                           channelCount: iso.album.channelCount,
+                                           totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
+                        let title = t.title.isEmpty ? "Track \(t.index + 1)" : t.title
+                        added.append(PlaylistItem(isoURL: url, info: info,
+                                                  trackIndex: t.index, title: title))
+                    }
+                } catch {
+                    failures.append(url.lastPathComponent)
+                }
+                continue
+            }
             if playlist.contains(where: { $0.url == url }) { continue }
             do {
                 let src = try DSDFile.open(url)
@@ -406,8 +480,9 @@ final class PlayerModel: ObservableObject {
         guard playlist.indices.contains(index) else { return }
         currentIndex = index
         persist()
+        guard let src = openSource(for: playlist[index]) else { return }
         do {
-            try engine.load(url: playlist[index].url)
+            try engine.load(source: src)
             position = 0
             statusMessage = ""
         } catch {
@@ -435,7 +510,7 @@ final class PlayerModel: ObservableObject {
     /// 优先无缝切换（同规格曲目保持音频链路不断），否则完整重开
     private func playOrSwitch(to index: Int) {
         guard playlist.indices.contains(index) else { return }
-        if let src = try? DSDFile.open(playlist[index].url), engine.switchTrack(src) {
+        if let src = openSource(for: playlist[index]), engine.switchTrack(src) {
             currentIndex = index
             position = 0
             persist()
@@ -528,6 +603,8 @@ struct Theme {
     let isDark: Bool
     let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
     let dotGrid: Bool           // 面板点阵纹理（博朗风格）
+    let crtGlow: Bool           // CRT 荧光效果（Terminal 皮肤：文字晕光 + 扫描线）
+    let proLook: Bool           // 专业仪器风格（仅 Dark：香槟金/等宽读数/VU 渐变/Bit-Perfect 标识/微渐变）
 }
 
 enum Skin: Int, CaseIterable, Identifiable {
@@ -549,13 +626,15 @@ enum Skin: Int, CaseIterable, Identifiable {
         switch self {
         case .dark:
             return Theme(
-                bgTop: Color(red: 0.10, green: 0.09, blue: 0.13),
-                bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
-                accent: Color(red: 0.93, green: 0.68, blue: 0.30),
+                bgTop: Color(red: 0.0706, green: 0.0706, blue: 0.0706),   // #121212
+                bgBottom: Color(red: 0.0706, green: 0.0706, blue: 0.0706),
+                accent: Color(red: 0.93, green: 0.68, blue: 0.30),   // 保持原金色
                 badgeBg: Color.white.opacity(0.08),
                 isDark: true,
                 physicalButtons: false,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: false,
+                proLook: true)
         case .braun:
             // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮、面板点阵
             return Theme(
@@ -565,17 +644,21 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.black.opacity(0.07),
                 isDark: false,
                 physicalButtons: true,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: false,
+                proLook: false)
         case .terminal:
-            // 绿磷光终端
+            // 绿磷光终端：墨绿底 + CRT 荧光 + 等宽字体
             return Theme(
-                bgTop: Color(red: 0.04, green: 0.07, blue: 0.05),
-                bgBottom: Color(red: 0.02, green: 0.04, blue: 0.03),
+                bgTop: Color(red: 0.03, green: 0.10, blue: 0.06),   // 更浓的墨绿
+                bgBottom: Color(red: 0.02, green: 0.07, blue: 0.04),
                 accent: Color(red: 0.24, green: 0.94, blue: 0.45),
                 badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
                 isDark: true,
                 physicalButtons: false,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: true,
+                proLook: false)
         }
     }
 }
@@ -592,6 +675,11 @@ struct ContentView: View {
 
     private var theme: Theme { model.skin.theme }
 
+    /// 时间字体：Terminal 用液晶数字（DB LCD Temp）并放大
+    private var timeFont: Font {
+        theme.crtGlow ? .custom("DB LCD Temp", size: 18) : .caption.monospacedDigit()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // 上部面板：正文正常布局，不做任何手动补偿
@@ -602,7 +690,7 @@ struct ContentView: View {
             }
             .background(faceplateBackground)
             if model.showPlaylist {
-                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                Divider().overlay(theme.crtGlow ? theme.accent.opacity(0.18) : (theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12)))
                 playlistView
                     .background(theme.bgBottom)   // 不透明盖住冲孔
             }
@@ -638,6 +726,29 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        // CRT 扫描线 + 暗角（Terminal 皮肤）
+        .overlay {
+            if theme.crtGlow {
+                ZStack {
+                    Canvas { ctx, size in
+                        var y: CGFloat = 0
+                        while y < size.height {
+                            ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
+                                     with: .color(.black.opacity(0.10)))
+                            y += 3
+                        }
+                    }
+                    // 暗角：四周轻微压暗，模拟 CRT 玻璃
+                    GeometryReader { geo in
+                        RadialGradient(colors: [.clear, .black.opacity(0.22)],
+                                       center: .center,
+                                       startRadius: min(geo.size.width, geo.size.height) * 0.45,
+                                       endRadius: max(geo.size.width, geo.size.height) * 0.8)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
         // 告警：出现新告警时弹窗（顶栏不再有常驻告警图标）；
         // onAppear 兜底处理启动时（视图挂载前）就存在的告警
         .onChange(of: model.warningText) { _, new in
@@ -701,9 +812,17 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
+    @ViewBuilder
     private var faceplateBackground: some View {
         // 纯色面板：与标题栏（外层背景 bgTop）严格同源同色
-        theme.bgTop
+        if theme.proLook {
+            // 专业仪器：极淡的顶部微亮渐变（金属面板质感）
+            theme.bgTop.overlay(
+                LinearGradient(colors: [Color.white.opacity(0.04), Color.clear],
+                               startPoint: .top, endPoint: .bottom))
+        } else {
+            theme.bgTop
+        }
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
@@ -715,10 +834,9 @@ struct ContentView: View {
                         .font(.system(size: 22))
                         .foregroundStyle(theme.accent)
                     Text("DSD Player")
-                        .font(.headline)
+                        .font(.custom("Arial Rounded MT Bold", size: 18))   // 博朗商标风格圆润粗体
                 }
                 .holeFreeZone()
-                .padding(.leading, 64)   // 避开红绿灯按钮
                 Spacer()
                 // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
                 // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
@@ -813,8 +931,10 @@ struct ContentView: View {
     private var nowPlaying: some View {
         VStack(spacing: 10) {
             MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
-                        font: .title3.weight(.semibold))
+                        font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
+                        showCursor: theme.crtGlow, cursorColor: theme.accent)
                 .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                .crtGlowText(theme)
                 .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
                 .holeFreeZone()
 
@@ -830,8 +950,16 @@ struct ContentView: View {
                          ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
                          : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
                         .foregroundStyle(theme.accent)
+                    // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
+                    HStack(spacing: 3) {
+                        Circle().fill(theme.accent).frame(width: 4, height: 4)
+                        Text("Bit-Perfect")
+                    }
+                    .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
+                    .foregroundStyle(theme.accent)
                 }
-                .font(.caption.monospacedDigit())
+                .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
+                .crtGlowText(theme)
                 .holeFreeZone()
             } else {
                 Text("Add .dsf / .dff files to start playing")
@@ -842,7 +970,10 @@ struct ContentView: View {
             // 进度（收窄，两侧露出冲孔）
             HStack(spacing: 10) {
                 Text(formatTime(model.position))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(timeFont)   // Terminal 用液晶数字并放大
+                    .foregroundStyle(.secondary)
+                    .frame(height: 22)   // 所有皮肤统一时间标签高度
+                    .crtGlowText(theme)
                 ThemedSlider(
                     value: Binding(
                         get: { model.position },
@@ -852,7 +983,10 @@ struct ContentView: View {
                     theme: theme,
                     onEditingEnded: { model.seek(to: model.position) })
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(timeFont)
+                    .foregroundStyle(.secondary)
+                    .frame(height: 22)
+                    .crtGlowText(theme)
             }
             .holeFreeZone()
             .padding(.horizontal, 56)   // 避让区只含内容；实测补偿后两侧恰好露出 3 个冲孔
@@ -882,24 +1016,36 @@ struct ContentView: View {
                                 help: "Previous (⌘←)",
                                 enabled: !model.playlist.isEmpty) { model.previous() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                // 播放/暂停主按钮
+                // 播放/暂停主按钮：所有皮肤统一 64×64 容器（绝对位置一致）
                 Button { model.togglePlay() } label: {
-                    if theme.physicalButtons {
-                        // 拟物大圆钮（博朗风格）
-                        Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 64, height: 64)
-                            .background(
-                                Circle()
-                                    .fill(theme.accent)
-                                    .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
-                            )
-                    } else {
-                        Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 46))
-                            .foregroundStyle(theme.accent)
+                    Group {
+                        if theme.physicalButtons {
+                            // 拟物大圆钮（博朗风格）
+                            Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 64, height: 64)
+                                .background(
+                                    Circle()
+                                        .fill(theme.accent)
+                                        .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                                )
+                        } else if theme.crtGlow {
+                            // 终端：方形播放/暂停按钮（pause.square.fill 不存在，暂停自绘）
+                            if model.state == .playing {
+                                SquarePauseIcon(theme: theme)
+                            } else {
+                                Image(systemName: "play.square.fill")
+                                    .font(.system(size: 46))
+                                    .foregroundStyle(theme.accent)
+                            }
+                        } else {
+                            Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 46))
+                                .foregroundStyle(theme.accent)
+                        }
                     }
+                    .frame(width: 64, height: 64)   // 所有皮肤统一占位
                 }
                 .buttonStyle(PressScaleStyle())
                 .disabled(model.playlist.isEmpty)
@@ -972,14 +1118,14 @@ struct ContentView: View {
                                 }
                             if idx < model.playlist.count - 1 {
                                 Divider()
-                                    .overlay(theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08))
+                                    .overlay(theme.crtGlow ? theme.accent.opacity(0.15) : (theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08)))
                                     .padding(.leading, 36)
                             }
                         }
                     }
                     .padding(.horizontal, 8)
                 }
-                .frame(height: 400)   // 固定高度：恰好 10 首
+                .frame(height: 360)   // 固定高度：约 10 行
             }
         }
         .frame(maxWidth: .infinity)
@@ -1012,6 +1158,7 @@ struct ContentView: View {
                     .frame(width: 18)
             }
             Text(item.title)
+                .font(theme.crtGlow ? .callout.monospaced() : .body)
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(isSelected ? onAccent : (isCurrent ? theme.accent : .primary))
             Spacer()
@@ -1028,6 +1175,7 @@ struct ContentView: View {
                 .fill(isSelected ? theme.accent.opacity(0.9) : Color.clear)
         )
         .frame(height: 34)
+        .crtGlowText(theme)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
@@ -1081,7 +1229,7 @@ struct ContentView: View {
     }
 
     /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
-    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 92) -> String {
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 130) -> String {
         let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
@@ -1105,6 +1253,24 @@ struct ContentView: View {
             .foregroundStyle(onAccent ? onAccentText
                              : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 方形暂停图标（Terminal：pause.square.fill 不存在，自绘）
+
+struct SquarePauseIcon: View {
+    let theme: Theme
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9)
+                .fill(theme.accent)
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1).fill(theme.bgTop).frame(width: 5, height: 17)
+                RoundedRectangle(cornerRadius: 1).fill(theme.bgTop).frame(width: 5, height: 17)
+            }
+        }
+        .frame(width: 38, height: 38)
+        .shadow(color: theme.accent.opacity(0.5), radius: 4)
     }
 }
 
@@ -1154,7 +1320,15 @@ struct ThemedSlider: View {
         .opacity(enabled ? 1 : 0.45)
     }
 
+    @ViewBuilder
     private func knob(diameter d: CGFloat) -> some View {
+        if theme.crtGlow {
+            // 终端风格：竖条矩形旋钮
+            RoundedRectangle(cornerRadius: 2)
+                .fill(theme.accent)
+                .frame(width: 8, height: 18)
+                .shadow(color: theme.accent.opacity(0.6), radius: 3)
+        } else {
         Circle()
             .fill(theme.physicalButtons ? Color.white : theme.accent)
             .frame(width: d, height: d)
@@ -1166,6 +1340,7 @@ struct ThemedSlider: View {
                     : theme.accent.opacity(dragging ? 0.6 : 0.3),
                     radius: theme.physicalButtons ? 2 : (dragging ? 4 : 2),
                     y: theme.physicalButtons ? 1.5 : 0)
+        }
     }
 }
 
@@ -1203,6 +1378,7 @@ struct ModePicker: View {
                                  ? (theme.isDark ? Color.black.opacity(0.85) : Color.white)
                                  : Color.primary.opacity(hovering == value ? 0.9 : 0.55))
                 .frame(width: 52, height: 22)
+                .crtGlowText(theme)
                 .background {
                     if selected {
                         RoundedRectangle(cornerRadius: 6)
@@ -1227,6 +1403,13 @@ struct PressScaleStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.9 : 1)
             .opacity(configuration.isPressed ? 0.8 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// CRT 荧光文字晕光（仅 Terminal 皮肤）
+extension View {
+    func crtGlowText(_ theme: Theme) -> some View {
+        shadow(color: theme.crtGlow ? theme.accent.opacity(0.65) : .clear, radius: 2.5)
     }
 }
 
@@ -1263,6 +1446,7 @@ struct TransportButton: View {
             Image(systemName: icon)
                 .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
                 .foregroundStyle(active ? theme.accent : Color.primary.opacity(hovering ? 1.0 : 0.85))
+                .crtGlowText(theme)
                 .frame(width: 36, height: 36)
                 .background {
                     if theme.physicalButtons {
@@ -1344,6 +1528,8 @@ private struct WindowConfigurator: NSViewRepresentable {
 struct MarqueeText: View {
     let text: String
     var font: Font = .title3.weight(.semibold)
+    var showCursor = false      // Terminal 皮肤：光标紧跟文字末尾
+    var cursorColor: Color = .primary
 
     @State private var startDate = Date()
 
@@ -1360,23 +1546,36 @@ struct MarqueeText: View {
             if overflow > 0 {
                 // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
                 TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
-                    Text(text)
-                        .font(font)
-                        .lineLimit(1)
+                    contentWithCursor
                         .fixedSize()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .offset(x: -scrollDistance(at: context.date, overflow: overflow))
                 }
             } else {
-                Text(text)
-                    .font(font)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)   // 短文本居中
+                contentWithCursor
+                    .frame(maxWidth: .infinity)   // 短文本居中（光标紧跟文字）
             }
         }
         .frame(height: 26)
         .clipped()
         .onChange(of: text) { startDate = Date() }
+    }
+
+    @ViewBuilder
+    private var contentWithCursor: some View {
+        HStack(spacing: 2) {
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+            if showCursor {
+                TimelineView(.periodic(from: .now, by: 0.8)) { _ in
+                    Text("▋")
+                        .font(font)
+                        .foregroundStyle(cursorColor)
+                        .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.1)
+                }
+            }
+        }
     }
 
     private func scrollDistance(at date: Date, overflow: CGFloat) -> CGFloat {
@@ -1405,27 +1604,38 @@ struct VUMeter: View {
     private let segments = 28   // 每侧段数（组件总宽不变）
 
     var body: some View {
-        HStack(spacing: 6) {
-            // 左声道：从中间向左增长
-            HStack(spacing: 1.5) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let fromCenter = Double(segments - 1 - i) / Double(segments)  // 0=靠中间
-                    segment(lit: fromCenter < norm(left), pos: fromCenter)
+        // Canvas 绘制：段宽对齐到整像素，避免 HStack 分配小数宽度导致粗细不均
+        Canvas { ctx, size in
+            let lampD: CGFloat = 13
+            let gap: CGFloat = 6
+            let sideW = (size.width - lampD - gap * 2) / 2
+            let n = segments
+            let spacing: CGFloat = 1.5
+            // 段宽向下取 0.5pt 整数倍（Retina 下 = 整像素）
+            let segW = ((sideW - spacing * CGFloat(n - 1)) / CGFloat(n) * 2).rounded(.down) / 2
+            let step = segW + spacing
+            let actualW = step * CGFloat(n) - spacing
+
+            func drawSide(leftX: CGFloat, level: Double, mirrored: Bool) {
+                for i in 0..<n {
+                    let fromCenter = mirrored ? Double(n - 1 - i) / Double(n) : Double(i) / Double(n)
+                    let lit = fromCenter < norm(level)
+                    let rect = CGRect(x: leftX + CGFloat(i) * step,
+                                      y: 0, width: segW, height: size.height)
+                    let path = Path(roundedRect: rect, cornerRadius: 1.5)
+                    ctx.fill(path, with: .color(lit ? segmentColor(fromCenter) : theme.badgeBg))
                 }
             }
-            // 中央指示灯：播放时亮起
-            Circle()
-                .fill(isPlaying ? theme.accent : theme.badgeBg)
-                .frame(width: 13, height: 13)
-                .shadow(color: isPlaying ? theme.accent.opacity(0.8) : .clear,
-                        radius: 5)
-            // 右声道：从中间向右增长
-            HStack(spacing: 1.5) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let fromCenter = Double(i) / Double(segments)
-                    segment(lit: fromCenter < norm(right), pos: fromCenter)
-                }
-            }
+
+            // 左声道（从中间向左增长）
+            drawSide(leftX: (sideW - actualW) / 2, level: left, mirrored: true)
+            // 中央指示灯
+            let lampRect = CGRect(x: sideW + gap, y: (size.height - lampD) / 2,
+                                  width: lampD, height: lampD)
+            ctx.fill(Path(ellipseIn: lampRect),
+                     with: .color(isPlaying ? theme.accent : theme.badgeBg))
+            // 右声道
+            drawSide(leftX: size.width - actualW - (sideW - actualW) / 2, level: right, mirrored: false)
         }
         .frame(height: 13)
     }
@@ -1436,13 +1646,13 @@ struct VUMeter: View {
         return max(0, (db + 60) / 60)
     }
 
-    private func segment(lit: Bool, pos: Double) -> some View {
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(lit ? segmentColor(pos) : theme.badgeBg)
-            .frame(maxWidth: .infinity)
-    }
-
     private func segmentColor(_ pos: Double) -> Color {
+        if theme.proLook {
+            // 专业电平表配色：绿区安全 → 黄区余量 → 红区峰值
+            if pos > 0.85 { return Color(red: 0.9, green: 0.3, blue: 0.25) }
+            if pos > 0.55 { return Color(red: 0.9, green: 0.7, blue: 0.3) }
+            return Color(red: 0.35, green: 0.78, blue: 0.45)
+        }
         if pos > 0.9 { return .red.opacity(0.9) }   // 峰值区红色警示
         return theme.accent
     }
