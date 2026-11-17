@@ -748,11 +748,12 @@ struct ContentView: View {
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.tail)
+                            .frame(maxWidth: 148)   // 限制文字宽度，长名字也留出呼吸空间
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption2)
                             .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满外层固定宽度胶囊
                     .contentShape(Rectangle())
                 }
