@@ -753,15 +753,14 @@ struct ContentView: View {
                             .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
                     }
                     .padding(.horizontal, 10)
-                    .frame(maxHeight: .infinity)   // 填满外层 28pt 胶囊，保证点击区域撑满
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满外层固定宽度胶囊
                     .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .fixedSize()
                 .onHover { deviceHover = $0 }
             }
-            .frame(height: 28)   // 固定在外层：Menu 控件自身的 label 度量不吃 frame(height:)
+            .frame(width: 200, height: 28)   // 固定宽度：与模式开关对齐，设备名变化不跳动
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(theme.isDark
@@ -779,7 +778,6 @@ struct ContentView: View {
                             lineWidth: 1)
             )
             .animation(.easeOut(duration: 0.15), value: deviceHover)
-            .frame(maxWidth: 240)
             .holeFreeZone()
             Menu {
                 ForEach(Skin.allCases) { skin in
