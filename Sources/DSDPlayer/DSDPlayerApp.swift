@@ -648,10 +648,10 @@ enum Skin: Int, CaseIterable, Identifiable {
                 crtGlow: false,
                 proLook: false)
         case .terminal:
-            // 绿磷光终端
+            // 绿磷光终端：墨绿底 + CRT 荧光 + 等宽字体
             return Theme(
-                bgTop: Color(red: 0.04, green: 0.07, blue: 0.05),
-                bgBottom: Color(red: 0.02, green: 0.04, blue: 0.03),
+                bgTop: Color(red: 0.03, green: 0.10, blue: 0.06),   // 更浓的墨绿
+                bgBottom: Color(red: 0.02, green: 0.07, blue: 0.04),
                 accent: Color(red: 0.24, green: 0.94, blue: 0.45),
                 badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
                 isDark: true,
@@ -675,6 +675,11 @@ struct ContentView: View {
 
     private var theme: Theme { model.skin.theme }
 
+    /// 时间字体：Terminal 用液晶数字（DB LCD Temp）并放大
+    private var timeFont: Font {
+        theme.crtGlow ? .custom("DB LCD Temp", size: 18) : .caption.monospacedDigit()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // 上部面板：正文正常布局，不做任何手动补偿
@@ -685,7 +690,7 @@ struct ContentView: View {
             }
             .background(faceplateBackground)
             if model.showPlaylist {
-                Divider().overlay(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12))
+                Divider().overlay(theme.crtGlow ? theme.accent.opacity(0.18) : (theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12)))
                 playlistView
                     .background(theme.bgBottom)   // 不透明盖住冲孔
             }
@@ -721,15 +726,24 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
-        // CRT 扫描线（Terminal 皮肤）
+        // CRT 扫描线 + 暗角（Terminal 皮肤）
         .overlay {
             if theme.crtGlow {
-                Canvas { ctx, size in
-                    var y: CGFloat = 0
-                    while y < size.height {
-                        ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
-                                 with: .color(.black.opacity(0.10)))
-                        y += 3
+                ZStack {
+                    Canvas { ctx, size in
+                        var y: CGFloat = 0
+                        while y < size.height {
+                            ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
+                                     with: .color(.black.opacity(0.10)))
+                            y += 3
+                        }
+                    }
+                    // 暗角：四周轻微压暗，模拟 CRT 玻璃
+                    GeometryReader { geo in
+                        RadialGradient(colors: [.clear, .black.opacity(0.22)],
+                                       center: .center,
+                                       startRadius: min(geo.size.width, geo.size.height) * 0.45,
+                                       endRadius: max(geo.size.width, geo.size.height) * 0.8)
                     }
                 }
                 .allowsHitTesting(false)
@@ -916,12 +930,16 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
-            MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
-                        font: .title3.weight(.semibold))
-                .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
-                .crtGlowText(theme)
-                .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
-                .holeFreeZone()
+            HStack(spacing: 4) {
+                MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
+                            font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold))
+                    .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                    .crtGlowText(theme)
+                    .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
+                    .holeFreeZone()
+                // 终端风格闪烁方块光标
+                if theme.crtGlow { BlinkingCursor(theme: theme) }
+            }
 
             if let info = model.currentInfo {
                 // 信号链：源规格 → 输出方式与载波率
@@ -957,7 +975,9 @@ struct ContentView: View {
             // 进度（收窄，两侧露出冲孔）
             HStack(spacing: 10) {
                 Text(formatTime(model.position))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(timeFont)   // Terminal 用液晶数字并放大
+                    .foregroundStyle(.secondary)
+                    .crtGlowText(theme)
                 ThemedSlider(
                     value: Binding(
                         get: { model.position },
@@ -967,7 +987,9 @@ struct ContentView: View {
                     theme: theme,
                     onEditingEnded: { model.seek(to: model.position) })
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(timeFont)
+                    .foregroundStyle(.secondary)
+                    .crtGlowText(theme)
             }
             .holeFreeZone()
             .padding(.horizontal, 56)   // 避让区只含内容；实测补偿后两侧恰好露出 3 个冲孔
@@ -1087,7 +1109,7 @@ struct ContentView: View {
                                 }
                             if idx < model.playlist.count - 1 {
                                 Divider()
-                                    .overlay(theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08))
+                                    .overlay(theme.crtGlow ? theme.accent.opacity(0.15) : (theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08)))
                                     .padding(.leading, 36)
                             }
                         }
@@ -1127,6 +1149,7 @@ struct ContentView: View {
                     .frame(width: 18)
             }
             Text(item.title)
+                .font(theme.crtGlow ? .callout.monospaced() : .body)
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(isSelected ? onAccent : (isCurrent ? theme.accent : .primary))
             Spacer()
@@ -1224,6 +1247,21 @@ struct ContentView: View {
     }
 }
 
+// MARK: - 闪烁方块光标（Terminal 皮肤）
+
+struct BlinkingCursor: View {
+    let theme: Theme
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.8)) { _ in
+            Text("▋")
+                .font(.custom("Menlo-Bold", size: 15))
+                .foregroundStyle(theme.accent)
+                .crtGlowText(theme)
+                .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.1)
+        }
+    }
+}
+
 // MARK: - 主题化进度滑杆
 
 /// 主题化进度条：主题色轨道填充 + 旋钮；悬停/拖动时旋钮放大；点击跳转
@@ -1270,7 +1308,15 @@ struct ThemedSlider: View {
         .opacity(enabled ? 1 : 0.45)
     }
 
+    @ViewBuilder
     private func knob(diameter d: CGFloat) -> some View {
+        if theme.crtGlow {
+            // 终端风格：竖条矩形旋钮
+            RoundedRectangle(cornerRadius: 2)
+                .fill(theme.accent)
+                .frame(width: 8, height: 18)
+                .shadow(color: theme.accent.opacity(0.6), radius: 3)
+        } else {
         Circle()
             .fill(theme.physicalButtons ? Color.white : theme.accent)
             .frame(width: d, height: d)
@@ -1282,6 +1328,7 @@ struct ThemedSlider: View {
                     : theme.accent.opacity(dragging ? 0.6 : 0.3),
                     radius: theme.physicalButtons ? 2 : (dragging ? 4 : 2),
                     y: theme.physicalButtons ? 1.5 : 0)
+        }
     }
 }
 
