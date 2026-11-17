@@ -950,15 +950,13 @@ struct ContentView: View {
                          ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
                          : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
                         .foregroundStyle(theme.accent)
-                    // Bit-Perfect 标识：DoP 位元直通播放时点亮（专业仪器风格）
-                    if theme.proLook {
-                        HStack(spacing: 3) {
-                            Circle().fill(theme.accent).frame(width: 4, height: 4)
-                            Text("Bit-Perfect")
-                        }
-                        .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
-                        .foregroundStyle(theme.accent)
+                    // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
+                    HStack(spacing: 3) {
+                        Circle().fill(theme.accent).frame(width: 4, height: 4)
+                        Text("Bit-Perfect")
                     }
+                    .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
+                    .foregroundStyle(theme.accent)
                 }
                 .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
                 .crtGlowText(theme)
@@ -974,6 +972,7 @@ struct ContentView: View {
                 Text(formatTime(model.position))
                     .font(timeFont)   // Terminal 用液晶数字并放大
                     .foregroundStyle(.secondary)
+                    .frame(height: 22)   // 所有皮肤统一时间标签高度
                     .crtGlowText(theme)
                 ThemedSlider(
                     value: Binding(
@@ -986,6 +985,7 @@ struct ContentView: View {
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(timeFont)
                     .foregroundStyle(.secondary)
+                    .frame(height: 22)
                     .crtGlowText(theme)
             }
             .holeFreeZone()
@@ -1016,33 +1016,36 @@ struct ContentView: View {
                                 help: "Previous (⌘←)",
                                 enabled: !model.playlist.isEmpty) { model.previous() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
-                // 播放/暂停主按钮
+                // 播放/暂停主按钮：所有皮肤统一 64×64 容器（绝对位置一致）
                 Button { model.togglePlay() } label: {
-                    if theme.physicalButtons {
-                        // 拟物大圆钮（博朗风格）
-                        Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 64, height: 64)
-                            .background(
-                                Circle()
-                                    .fill(theme.accent)
-                                    .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
-                            )
-                    } else if theme.crtGlow {
-                        // 终端：方形播放/暂停按钮（pause.square.fill 不存在，暂停自绘）
-                        if model.state == .playing {
-                            SquarePauseIcon(theme: theme)
+                    Group {
+                        if theme.physicalButtons {
+                            // 拟物大圆钮（博朗风格）
+                            Image(systemName: model.state == .playing ? "pause.fill" : "play.fill")
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 64, height: 64)
+                                .background(
+                                    Circle()
+                                        .fill(theme.accent)
+                                        .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                                )
+                        } else if theme.crtGlow {
+                            // 终端：方形播放/暂停按钮（pause.square.fill 不存在，暂停自绘）
+                            if model.state == .playing {
+                                SquarePauseIcon(theme: theme)
+                            } else {
+                                Image(systemName: "play.square.fill")
+                                    .font(.system(size: 46))
+                                    .foregroundStyle(theme.accent)
+                            }
                         } else {
-                            Image(systemName: "play.square.fill")
+                            Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
                                 .font(.system(size: 46))
                                 .foregroundStyle(theme.accent)
                         }
-                    } else {
-                        Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 46))
-                            .foregroundStyle(theme.accent)
                     }
+                    .frame(width: 64, height: 64)   // 所有皮肤统一占位
                 }
                 .buttonStyle(PressScaleStyle())
                 .disabled(model.playlist.isEmpty)
