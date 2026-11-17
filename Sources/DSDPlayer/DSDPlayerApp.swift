@@ -656,7 +656,7 @@ struct ContentView: View {
             model.engine.stop()
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
-        .frame(width: 720)
+        .frame(width: 640)
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
