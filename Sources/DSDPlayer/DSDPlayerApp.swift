@@ -763,6 +763,9 @@ struct ContentView: View {
                     .fill(theme.isDark
                           ? Color.white.opacity(deviceHover ? 0.14 : 0.09)
                           : Color.black.opacity(deviceHover ? 0.1 : 0.05))
+                    // 拟物皮肤加投影（只投影胶囊底，不带文字）
+                    .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
+                            radius: 2, y: 1.5)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
@@ -771,8 +774,6 @@ struct ContentView: View {
                             : (theme.isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.14)),
                             lineWidth: 1)
             )
-            .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
-                    radius: 2, y: 1.5)   // 拟物皮肤加投影
             .animation(.easeOut(duration: 0.15), value: deviceHover)
             .frame(maxWidth: 240)
             .holeFreeZone()
