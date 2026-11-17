@@ -50,7 +50,22 @@ struct PlaylistItem: Identifiable, Hashable {
     let id = UUID()
     let url: URL
     let info: DSDInfo
-    var title: String { url.deletingPathExtension().lastPathComponent }
+    let isoTrackIndex: Int?   // 非 nil：SACD ISO 内的第 N 首（url 指向 ISO 文件）
+    let title: String
+
+    init(url: URL, info: DSDInfo) {
+        self.url = url
+        self.info = info
+        self.isoTrackIndex = nil
+        self.title = url.deletingPathExtension().lastPathComponent
+    }
+
+    init(isoURL: URL, info: DSDInfo, trackIndex: Int, title: String) {
+        self.url = isoURL
+        self.info = info
+        self.isoTrackIndex = trackIndex
+        self.title = title
+    }
 }
 
 // MARK: - 播放模型
@@ -85,6 +100,28 @@ final class PlayerModel: ObservableObject {
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
     private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
+    private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径）
+
+    /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource
+    func openSource(for item: PlaylistItem) -> DSDSource? {
+        if let trackIdx = item.isoTrackIndex {
+            do {
+                let path = item.url.path
+                let iso: SacdISO
+                if let cached = isoCache[path] {
+                    iso = cached
+                } else {
+                    iso = try SacdISO(url: item.url)
+                    isoCache[path] = iso
+                }
+                return try iso.makeTrackSource(iso.album.tracks[trackIdx])
+            } catch {
+                statusMessage = error.localizedDescription
+                return nil
+            }
+        }
+        return try? DSDFile.open(item.url)
+    }
 
     // MARK: 持久化
 
@@ -93,7 +130,7 @@ final class PlayerModel: ObservableObject {
 
     private func persist() {
         guard !isRestoring else { return }
-        let saved = SavedState(paths: playlist.map { $0.url.path },
+        let saved = SavedState(paths: playlist.map { $0.url.path + ($0.isoTrackIndex.map { "#track=\($0)" } ?? "") },
                                currentIndex: currentIndex,
                                playMode: playMode.rawValue,
                                outputMode: outputMode.rawValue,
@@ -118,6 +155,24 @@ final class PlayerModel: ObservableObject {
         var items: [PlaylistItem] = []
         var missing = 0
         for path in saved.paths {
+            // ISO 曲目条目："iso路径#track=N"
+            if let range = path.range(of: "#track="), let idx = Int(path[range.upperBound...]) {
+                let isoPath = String(path[..<range.lowerBound])
+                guard FileManager.default.fileExists(atPath: isoPath) else { missing += 1; continue }
+                do {
+                    let iso: SacdISO
+                    if let cached = isoCache[isoPath] { iso = cached }
+                    else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); isoCache[isoPath] = iso }
+                    let t = iso.album.tracks[idx]
+                    let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
+                                       channelCount: iso.album.channelCount,
+                                       totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
+                    items.append(PlaylistItem(isoURL: URL(fileURLWithPath: isoPath), info: info,
+                                              trackIndex: idx,
+                                              title: t.title.isEmpty ? "Track \(t.index + 1)" : t.title))
+                } catch { missing += 1 }
+                continue
+            }
             let url = URL(fileURLWithPath: path)
             guard FileManager.default.fileExists(atPath: path),
                   let src = try? DSDFile.open(url) else { missing += 1; continue }
@@ -243,7 +298,7 @@ final class PlayerModel: ObservableObject {
         }
         queuedNextIndex = nextIdx
         if let ni = nextIdx {
-            engine.setNext(try? DSDFile.open(playlist[ni].url))
+            engine.setNext(openSource(for: playlist[ni]))
         } else {
             engine.setNext(nil)
         }
@@ -334,15 +389,16 @@ final class PlayerModel: ObservableObject {
         let panel = NSOpenPanel()
         let dsfType = UTType(filenameExtension: "dsf") ?? .data
         let dffType = UTType(filenameExtension: "dff") ?? .data
-        panel.allowedContentTypes = [dsfType, dffType]
+        let isoType = UTType(filenameExtension: "iso") ?? .data
+        panel.allowedContentTypes = [dsfType, dffType, isoType]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose DSD audio files (.dsf / .dff) — multiple selection allowed"
+        panel.message = "Choose DSD audio files (.dsf / .dff) or SACD ISO — multiple selection allowed"
         guard panel.runModal() == .OK else { return }
         add(urls: panel.urls)
     }
 
     func add(urls: [URL]) {
-        // 展开文件夹：递归收集其中的 DSD 文件
+        // 展开文件夹：递归收集其中的 DSD / ISO 文件
         var files: [URL] = []
         for url in urls {
             var isDir: ObjCBool = false
@@ -350,12 +406,12 @@ final class PlayerModel: ObservableObject {
                 if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
                     for case let f as URL in enumerator {
                         let ext = f.pathExtension.lowercased()
-                        if ext == "dsf" || ext == "dff" { files.append(f) }
+                        if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(f) }
                     }
                 }
             } else {
                 let ext = url.pathExtension.lowercased()
-                if ext == "dsf" || ext == "dff" { files.append(url) }
+                if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(url) }
             }
         }
         // 按路径自然排序，保证专辑曲序（01、02…）
@@ -364,6 +420,24 @@ final class PlayerModel: ObservableObject {
         var added: [PlaylistItem] = []
         var failures: [String] = []
         for url in files {
+            if url.pathExtension.lowercased() == "iso" {
+                // SACD ISO：展开为曲目列表
+                do {
+                    let iso = try SacdISO(url: url)
+                    isoCache[url.path] = iso
+                    for t in iso.album.tracks {
+                        let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
+                                           channelCount: iso.album.channelCount,
+                                           totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
+                        let title = t.title.isEmpty ? "Track \(t.index + 1)" : t.title
+                        added.append(PlaylistItem(isoURL: url, info: info,
+                                                  trackIndex: t.index, title: title))
+                    }
+                } catch {
+                    failures.append(url.lastPathComponent)
+                }
+                continue
+            }
             if playlist.contains(where: { $0.url == url }) { continue }
             do {
                 let src = try DSDFile.open(url)
@@ -406,8 +480,9 @@ final class PlayerModel: ObservableObject {
         guard playlist.indices.contains(index) else { return }
         currentIndex = index
         persist()
+        guard let src = openSource(for: playlist[index]) else { return }
         do {
-            try engine.load(url: playlist[index].url)
+            try engine.load(source: src)
             position = 0
             statusMessage = ""
         } catch {
@@ -435,7 +510,7 @@ final class PlayerModel: ObservableObject {
     /// 优先无缝切换（同规格曲目保持音频链路不断），否则完整重开
     private func playOrSwitch(to index: Int) {
         guard playlist.indices.contains(index) else { return }
-        if let src = try? DSDFile.open(playlist[index].url), engine.switchTrack(src) {
+        if let src = openSource(for: playlist[index]), engine.switchTrack(src) {
             currentIndex = index
             position = 0
             persist()

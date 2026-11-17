@@ -5,8 +5,14 @@ let package = Package(
     name: "DSDPlayer",
     platforms: [.macOS(.v15)],
     targets: [
+        .target(
+            name: "Cdstdec",
+            path: "Sources/Cdstdec",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "DSDPlayer",
+            dependencies: ["Cdstdec"],
             path: "Sources/DSDPlayer"
         ),
         .testTarget(
