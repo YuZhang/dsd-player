@@ -12,6 +12,10 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 
 ![Braun Retro skin](Resources/screenshot_skin1.png)
 
+**Terminal Green skin**
+
+![Terminal Green skin](Resources/screenshot_skin2.png)
+
 ## Features
 
 - **Formats**: DSF and DFF (DSDIFF) — DSD64 / DSD128 / DSD256, mono and stereo; **SACD ISO** (stereo area, both uncompressed DSD and DST-compressed frames decoded in real time)
