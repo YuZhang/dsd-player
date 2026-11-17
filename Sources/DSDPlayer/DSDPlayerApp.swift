@@ -84,6 +84,7 @@ final class PlayerModel: ObservableObject {
     private var timer: Timer?
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
+    private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
 
     // MARK: 持久化
 
@@ -163,6 +164,46 @@ final class PlayerModel: ObservableObject {
         }
         setupRemoteCommands()
         restore()
+        applyLaunchDevicePolicy()
+        // 设备列表变更监听：拔插 / 睡眠唤醒后系统会重枚举设备（id 变化），
+        // 按持久 UID 重新匹配，避免绑定到失效的旧 id 导致无法播放
+        AudioDeviceManager.installDeviceChangeListener { [weak self] in
+            Task { @MainActor in self?.handleDeviceChange() }
+        }
+    }
+
+    /// 设备列表变化：同 UID 设备换新 id 则透明更新；正在播放的设备消失则停止
+    private func handleDeviceChange() {
+        let prevUID = selectedDevice?.uid
+        devices = AudioDeviceManager.outputDevices()
+        if let uid = prevUID, let match = devices.first(where: { $0.uid == uid }) {
+            selectedDevice = match   // 同一物理设备，id 可能已变
+        } else if let cur = selectedDevice, devices.contains(cur) {
+            // 保持不变
+        } else if let def = AudioDeviceManager.defaultOutputDevice(),
+                  let dev = devices.first(where: { $0.id == def }) {
+            selectedDevice = dev
+        } else {
+            selectedDevice = devices.first(where: { $0.isUSB }) ?? devices.first
+        }
+        // 正在播放/暂停的设备被拔出：停止并提示
+        if let puid = playingDeviceUID, state == .playing || state == .paused,
+           !devices.contains(where: { $0.uid == puid }) {
+            engine.stop()
+            state = .stopped
+            playingDeviceUID = nil
+            statusMessage = "Output device disconnected"
+        }
+    }
+
+    /// 启动设备策略：有 USB DAC 时选它并用 DoP 位元直通，否则用 PCM 模式（任意设备可用）
+    private func applyLaunchDevicePolicy() {
+        if let usb = devices.first(where: { $0.isUSB }) {
+            selectedDevice = usb
+            setOutputMode(.dop)
+        } else {
+            setOutputMode(.pcm)
+        }
     }
 
     private func tick() {
@@ -276,9 +317,14 @@ final class PlayerModel: ObservableObject {
         outputMode = mode
         engine.outputMode = mode
         persist()
-        // 播放中切换：从头重播当前曲目以应用新模式
+        // 播放/暂停中切换：保持当前位置续播（而不是从头重播）
         if state == .playing || state == .paused, let idx = currentIndex {
+            let wasPaused = state == .paused
+            let pos = engine.positionSeconds
             play(at: idx)
+            guard statusMessage.isEmpty else { return }   // 启动失败则不 seek
+            seek(to: pos)
+            if wasPaused { engine.pause() }
         }
     }
 
@@ -378,6 +424,7 @@ final class PlayerModel: ObservableObject {
         guard currentInfo != nil, statusMessage.isEmpty else { return }
         do {
             try engine.play(device: dev.id)
+            playingDeviceUID = dev.uid
             queueNextForGapless()
             updateNowPlaying()
         } catch {
@@ -538,7 +585,10 @@ enum Skin: Int, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
+    @State private var anchorIndex: Int?   // Shift 范围选择的锚点
     @State private var holeFreeRects: [CGRect] = []
+    @State private var activeWarning: String?   // 非 nil 时弹告警窗
+    @State private var deviceHover = false
 
     private var theme: Theme { model.skin.theme }
 
@@ -573,18 +623,40 @@ struct ContentView: View {
             }
             .ignoresSafeArea(.container, edges: .top)
         }
-        // 隐藏按钮承载方向键快进退快捷键
+        // 隐藏按钮承载快捷键：方向键快进退、Delete 删除选中、上下键移动选择
         .background(
             HStack {
                 Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
+                Button("") { removeSelection() }.keyboardShortcut(.delete, modifiers: [])
+                Button("") { moveSelection(-1, extend: false) }.keyboardShortcut(.upArrow, modifiers: [])
+                Button("") { moveSelection(1, extend: false) }.keyboardShortcut(.downArrow, modifiers: [])
+                Button("") { moveSelection(-1, extend: true) }.keyboardShortcut(.upArrow, modifiers: .shift)
+                Button("") { moveSelection(1, extend: true) }.keyboardShortcut(.downArrow, modifiers: .shift)
             }
             .opacity(0)
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        // 告警：出现新告警时弹窗（顶栏不再有常驻告警图标）；
+        // onAppear 兜底处理启动时（视图挂载前）就存在的告警
+        .onChange(of: model.warningText) { _, new in
+            if let new { activeWarning = new }
+        }
+        .onAppear { activeWarning = model.warningText }
+        .alert("Warning", isPresented: Binding(
+            get: { activeWarning != nil },
+            set: { if !$0 { activeWarning = nil } })) {
+            Button("OK") { activeWarning = nil }
+        } message: {
+            Text(activeWarning ?? "")
+        }
+        // 退出 App 时停止引擎：释放独占并恢复被 DoP 强制为 1.0 的音量
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            model.engine.stop()
+        }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
-        .frame(width: 720)
+        .frame(width: 560)
         .background(WindowConfigurator())   // 标题栏完全透明
     }
 
@@ -636,50 +708,73 @@ struct ContentView: View {
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
     private var header: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(theme.accent)
-                Text("DSD Player")
-                    .font(.headline)
-            }
-            .holeFreeZone()
-            .padding(.leading, 64)   // 避开红绿灯按钮
-            Spacer()
-            Picker("", selection: Binding(
-                get: { model.outputMode },
-                set: { model.setOutputMode($0) })) {
-                Text("DoP").tag(OutputMode.dop)
-                Text("PCM").tag(OutputMode.pcm)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 130)
-            .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
-            .holeFreeZone()
-            // 告警图标：固定占位，有告警时显示，悬停查看详情（不影响其他控件位置）
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .opacity(model.warningText != nil ? 1 : 0)
-                .allowsHitTesting(model.warningText != nil)
-                .help(model.warningText ?? "")
-                .frame(width: 18)
+        ZStack {
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(theme.accent)
+                    Text("DSD Player")
+                        .font(.headline)
+                }
                 .holeFreeZone()
-            Picker("", selection: $model.selectedDevice) {
-                ForEach(model.devices) { dev in
-                    Text(dev.name + (dev.isUSB ? " ⚡" : "")).tag(Optional(dev))
+                .padding(.leading, 64)   // 避开红绿灯按钮
+                Spacer()
+                // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
+                // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
+                HStack(spacing: 0) {
+                    Menu {
+                        ForEach(model.devices) { dev in
+                            Button {
+                                model.selectedDevice = dev
+                            } label: {
+                                let name = dev.name + (dev.isUSB ? " ⚡" : "")
+                                if dev == model.selectedDevice {
+                                    Label(name, systemImage: "checkmark")
+                                } else {
+                                    Text(name)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Refresh Devices") { model.refreshDevices() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
+                            Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
+                                .font(.callout)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
+                            Spacer(minLength: 0)   // 内容靠左，右侧留白
+                        }
+                        .padding(.horizontal, 4)
+                        .frame(width: 164, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .onHover { deviceHover = $0 }
                 }
-            }
-            .labelsHidden()
-            .frame(maxWidth: 240)
-            .holeFreeZone()
-            HStack(spacing: 12) {
-                Button { model.refreshDevices() } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh device list")
+                .frame(width: 164, height: 28)   // 固定宽度：设备名变化不跳动
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(theme.isDark
+                              ? Color.white.opacity(deviceHover ? 0.14 : 0.09)
+                              : Color.black.opacity(deviceHover ? 0.1 : 0.05))
+                        // 拟物皮肤加投影（只投影胶囊底，不带文字）
+                        .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
+                                radius: 2, y: 1.5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(deviceHover
+                                ? theme.accent.opacity(0.6)
+                                : (theme.isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.14)),
+                                lineWidth: 1)
+                )
+                .animation(.easeOut(duration: 0.15), value: deviceHover)
+                .holeFreeZone()
                 Menu {
                     ForEach(Skin.allCases) { skin in
                         Button {
@@ -699,7 +794,14 @@ struct ContentView: View {
                 .menuIndicator(.hidden)
                 .frame(width: 28)
                 .help("Skin")
+                .hoverBrightness()
+                .holeFreeZone()
             }
+            // 输出模式开关：面板级居中（叠层实现，不受左右内容影响）
+            ModePicker(mode: Binding(
+                get: { model.outputMode },
+                set: { model.setOutputMode($0) }), theme: theme)
+            .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
@@ -717,16 +819,19 @@ struct ContentView: View {
                 .holeFreeZone()
 
             if let info = model.currentInfo {
-                HStack(spacing: 8) {
-                    badge(info.formatName)
-                    badge("DSD\(info.dsdMultiple)")
-                    badge(String(format: "%.1f MHz", Double(info.dsdSampleRate) / 1e6))
-                    badge("\(info.channelCount)ch")
-                    badge(model.outputMode == .dop
-                          ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
-                          : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz",
-                          highlight: true)
+                // 信号链：源规格 → 输出方式与载波率
+                HStack(spacing: 6) {
+                    Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                    Text(model.outputMode == .dop
+                         ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
+                         : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
+                        .foregroundStyle(theme.accent)
                 }
+                .font(.caption.monospacedDigit())
                 .holeFreeZone()
             } else {
                 Text("Add .dsf / .dff files to start playing")
@@ -738,15 +843,14 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Text(formatTime(model.position))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Slider(value: Binding(
-                    get: { model.position },
-                    set: { model.position = $0 }
-                ), in: 0...max(1, model.currentInfo?.durationSeconds ?? 1),
-                onEditingChanged: { editing in
-                    if !editing { model.seek(to: model.position) }
-                })
-                .tint(theme.accent)
-                .disabled(model.state == .idle)
+                ThemedSlider(
+                    value: Binding(
+                        get: { model.position },
+                        set: { model.position = $0 }),
+                    upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
+                    enabled: model.state != .idle,
+                    theme: theme,
+                    onEditingEnded: { model.seek(to: model.position) })
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -768,13 +872,17 @@ struct ContentView: View {
         HStack {
             Spacer()
             HStack(spacing: 28) {
-                transportButton(model.playMode.icon, size: 18,
+                TransportButton(icon: model.playMode.icon, size: 18, theme: theme,
                                 active: model.playMode != .sequential,
-                                help: model.playMode.label) {
+                                help: model.playMode.label,
+                                enabled: !model.playlist.isEmpty) {
                     model.playMode = model.playMode.next()
                 }
-                transportButton("backward.fill", size: 22, help: "Previous (⌘←)") { model.previous() }
+                TransportButton(icon: "backward.fill", size: 22, theme: theme,
+                                help: "Previous (⌘←)",
+                                enabled: !model.playlist.isEmpty) { model.previous() }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
+                // 播放/暂停主按钮
                 Button { model.togglePlay() } label: {
                     if theme.physicalButtons {
                         // 拟物大圆钮（博朗风格）
@@ -793,15 +901,19 @@ struct ContentView: View {
                             .foregroundStyle(theme.accent)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressScaleStyle())
                 .disabled(model.playlist.isEmpty)
                 .keyboardShortcut(.space, modifiers: [])
-                transportButton("forward.fill", size: 22, help: "Next (⌘→)") { model.next() }
+                .hoverBrightness()
+                TransportButton(icon: "forward.fill", size: 22, theme: theme,
+                                help: "Next (⌘→)",
+                                enabled: !model.playlist.isEmpty) { model.next() }
                     .keyboardShortcut(.rightArrow, modifiers: .command)
                 // 列表显隐
-                transportButton("list.bullet", size: 18,
+                TransportButton(icon: "list.bullet", size: 18, theme: theme,
                                 active: model.showPlaylist,
-                                help: model.showPlaylist ? "Hide Playlist" : "Show Playlist") {
+                                help: model.showPlaylist ? "Hide Playlist" : "Show Playlist",
+                                enabled: true) {
                     model.showPlaylist.toggle()
                 }
             }
@@ -810,27 +922,6 @@ struct ContentView: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 30)   // 播放按钮下方 1 行冲孔 + 正常边距
-    }
-
-    private func transportButton(_ icon: String, size: CGFloat, active: Bool = false,
-                                 help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
-                .foregroundStyle(active ? theme.accent : Color.primary.opacity(0.85))
-                .frame(width: 36, height: 36)
-                .background {
-                    if theme.physicalButtons {
-                        Circle()
-                            .fill(theme.bgTop)
-                            .shadow(color: .black.opacity(0.3), radius: 2, y: 1.5)
-                            .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .disabled(model.playlist.isEmpty)
-        .help(help)
     }
 
     // 播放列表
@@ -861,23 +952,34 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $selection) {
-                    ForEach(Array(model.playlist.enumerated()), id: \.element.id) { idx, item in
-                        playlistRow(idx: idx, item: item)
-                            .tag(item.id)
-                            .contextMenu {
-                                Button("Remove") {
-                                    if let i = model.playlist.firstIndex(of: item) {
-                                        model.remove(at: IndexSet(integer: i))
+                // 自绘选中高亮（主题强调色），不用 List 的系统蓝
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(model.playlist.enumerated()), id: \.element.id) { idx, item in
+                            playlistRow(idx: idx, item: item)
+                                .contextMenu {
+                                    if selection.contains(item.id), selection.count > 1 {
+                                        Button("Remove \(selection.count) Tracks") { removeSelection() }
+                                    } else {
+                                        Button("Remove") {
+                                            if let i = model.playlist.firstIndex(of: item) {
+                                                model.remove(at: IndexSet(integer: i))
+                                            }
+                                            selection = []
+                                            anchorIndex = nil
+                                        }
                                     }
                                 }
+                            if idx < model.playlist.count - 1 {
+                                Divider()
+                                    .overlay(theme.isDark ? Color.white.opacity(0.06) : Color.black.opacity(0.08))
+                                    .padding(.leading, 36)
                             }
+                        }
                     }
-                    .onDelete { model.remove(at: $0) }
+                    .padding(.horizontal, 8)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .frame(height: 400)   // 固定高度：恰好 10 首（实测行距 39.7pt）
+                .frame(height: 400)   // 固定高度：恰好 10 首
             }
         }
         .frame(maxWidth: .infinity)
@@ -893,41 +995,292 @@ struct ContentView: View {
     }
 
     private func playlistRow(idx: Int, item: PlaylistItem) -> some View {
-        HStack(spacing: 10) {
-            if model.currentIndex == idx {
+        let isSelected = selection.contains(item.id)
+        let isCurrent = model.currentIndex == idx
+        // 选中底上的对比文字色：深色皮肤用深字，浅色皮肤用白字
+        let onAccent: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        return HStack(spacing: 10) {
+            if isCurrent {
                 Image(systemName: model.state == .playing ? "waveform" : "pause")
                     .font(.caption)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(isSelected ? onAccent : theme.accent)
                     .frame(width: 18)
             } else {
                 Text("\(idx + 1)")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? onAccent.opacity(0.7) : .secondary)
                     .frame(width: 18)
             }
             Text(item.title)
                 .lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(model.currentIndex == idx ? theme.accent : .primary)
+                .foregroundStyle(isSelected ? onAccent : (isCurrent ? theme.accent : .primary))
             Spacer()
-            badge("DSD\(item.info.dsdMultiple)", small: true)
+            badge("DSD\(item.info.dsdMultiple)", small: true, onAccent: isSelected)
             Text(formatTime(item.info.durationSeconds))
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? onAccent.opacity(0.7) : .secondary)
                 .frame(width: 52, alignment: .trailing)
         }
-        .frame(height: 30)   // 固定行高，列表高度 = 10 行 × 32pt
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? theme.accent.opacity(0.9) : Color.clear)
+        )
+        .frame(height: 34)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
-        .onTapGesture(count: 1) { selection = [item.id] }
+        .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
     }
 
-    private func badge(_ text: String, highlight: Bool = false, small: Bool = false) -> some View {
-        Text(text)
+    /// 单击选择：普通点击单选；⌘点击切换加选/取消；⇧点击从锚点范围选择
+    private func handleSelect(idx: Int, item: PlaylistItem) {
+        let mods = NSEvent.modifierFlags
+        if mods.contains(.command) {
+            if selection.contains(item.id) { selection.remove(item.id) } else { selection.insert(item.id) }
+            anchorIndex = idx
+        } else if mods.contains(.shift), let anchor = anchorIndex,
+                  model.playlist.indices.contains(anchor) {
+            let range = min(anchor, idx)...max(anchor, idx)
+            selection = Set(range.map { model.playlist[$0].id })
+        } else {
+            selection = [item.id]
+            anchorIndex = idx
+        }
+    }
+
+    /// 键盘上下移动选择；Shift 从锚点扩展
+    private func moveSelection(_ delta: Int, extend: Bool) {
+        guard !model.playlist.isEmpty else { return }
+        let cur = anchorIndex ?? model.currentIndex ?? (delta > 0 ? -1 : 0)
+        let next = max(0, min(model.playlist.count - 1, cur + delta))
+        if extend {
+            let range = min(cur, next)...max(cur, next)
+            selection = Set(range.map { model.playlist[$0].id })
+        } else {
+            selection = [model.playlist[next].id]
+            anchorIndex = next
+        }
+    }
+
+    /// 删除所有选中的曲目
+    private func removeSelection() {
+        guard !selection.isEmpty else { return }
+        let idxs = IndexSet(model.playlist.indices.filter { selection.contains(model.playlist[$0].id) })
+        model.remove(at: idxs)
+        selection = []
+        anchorIndex = nil
+    }
+
+    private func channelLabel(_ count: Int) -> String {
+        switch count {
+        case 1: return "Mono"
+        case 2: return "Stereo"
+        default: return "\(count)ch"
+        }
+    }
+
+    /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 92) -> String {
+        let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
+        var s = name
+        while !s.isEmpty,
+              ((s + "…") as NSString).size(withAttributes: attrs).width > maxWidth {
+            s.removeLast()
+        }
+        return s + "…"
+    }
+
+    private func badge(_ text: String, highlight: Bool = false, small: Bool = false,
+                       onAccent: Bool = false) -> some View {
+        let onAccentText: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        return Text(text)
             .font(small ? .caption2 : .caption)
             .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1 : 3)
-            .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
-            .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
+            .background(onAccent
+                        ? (theme.isDark ? Color.black.opacity(0.25) : Color.white.opacity(0.25))
+                        : (highlight ? theme.accent.opacity(0.22) : theme.badgeBg))
+            .foregroundStyle(onAccent ? onAccentText
+                             : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 主题化进度滑杆
+
+/// 主题化进度条：主题色轨道填充 + 旋钮；悬停/拖动时旋钮放大；点击跳转
+struct ThemedSlider: View {
+    @Binding var value: Double
+    var upperBound: Double
+    var enabled: Bool = true
+    let theme: Theme
+    var onEditingEnded: () -> Void = {}
+
+    @State private var dragging = false
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let frac = upperBound > 0 ? min(1, max(0, value / upperBound)) : 0
+            let knobD: CGFloat = dragging ? 18 : (hovering ? 16 : 13)
+            ZStack(alignment: .leading) {
+                // 轨道
+                Capsule().fill(theme.badgeBg).frame(height: 4)
+                Capsule().fill(theme.accent.opacity(enabled ? 0.9 : 0.4))
+                    .frame(width: max(0, frac * w), height: 4)
+                // 旋钮
+                knob(diameter: knobD)
+                    .offset(x: frac * (w - knobD))
+                    .animation(.easeOut(duration: 0.15), value: dragging)
+                    .animation(.easeOut(duration: 0.12), value: hovering)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(enabled ? DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    dragging = true
+                    value = max(0, min(upperBound, Double(g.location.x / w) * upperBound))
+                }
+                .onEnded { _ in
+                    dragging = false
+                    onEditingEnded()
+                } : nil)
+            .onHover { hovering = $0 }
+        }
+        .frame(height: 20)
+        .opacity(enabled ? 1 : 0.45)
+    }
+
+    private func knob(diameter d: CGFloat) -> some View {
+        Circle()
+            .fill(theme.physicalButtons ? Color.white : theme.accent)
+            .frame(width: d, height: d)
+            .overlay(
+                Circle().stroke(theme.physicalButtons ? theme.accent : .clear,
+                                lineWidth: theme.physicalButtons ? 2 : 0)
+            )
+            .shadow(color: theme.physicalButtons ? .black.opacity(0.3)
+                    : theme.accent.opacity(dragging ? 0.6 : 0.3),
+                    radius: theme.physicalButtons ? 2 : (dragging ? 4 : 2),
+                    y: theme.physicalButtons ? 1.5 : 0)
+    }
+}
+
+// MARK: - 主题化输出模式开关
+
+/// DoP/PCM 分段开关：选中段用主题强调色，轨道用主题底色，随皮肤变化
+struct ModePicker: View {
+    @Binding var mode: OutputMode
+    let theme: Theme
+    @State private var hovering: OutputMode?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment("DoP", .dop)
+            segment("PCM", .pcm)
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.badgeBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.1),
+                        lineWidth: 0.5)
+        )
+    }
+
+    private func segment(_ label: String, _ value: OutputMode) -> some View {
+        let selected = mode == value
+        return Button { mode = value } label: {
+            Text(label)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected
+                                 ? (theme.isDark ? Color.black.opacity(0.85) : Color.white)
+                                 : Color.primary.opacity(hovering == value ? 0.9 : 0.55))
+                .frame(width: 52, height: 22)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(theme.accent)
+                            .shadow(color: theme.accent.opacity(0.5), radius: theme.physicalButtons ? 0 : 4)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 ? value : nil }
+        .animation(.easeOut(duration: 0.15), value: mode)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+// MARK: - 按钮交互反馈
+
+/// 按下缩放动画（所有可点按钮通用）
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// 悬停增亮（用于播放主按钮等大图标）
+extension View {
+    func hoverBrightness() -> some View { modifier(HoverBrightness()) }
+}
+
+private struct HoverBrightness: ViewModifier {
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    func body(content: Content) -> some View {
+        content
+            .brightness(hovering && isEnabled ? 0.18 : 0)
+            .animation(.easeOut(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// 传输控制按钮：悬停时非拟物皮肤显示圆形底、拟物皮肤加深阴影；按下缩放
+struct TransportButton: View {
+    let icon: String
+    var size: CGFloat
+    let theme: Theme
+    var active: Bool = false
+    var help: String = ""
+    var enabled: Bool = true
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
+                .foregroundStyle(active ? theme.accent : Color.primary.opacity(hovering ? 1.0 : 0.85))
+                .frame(width: 36, height: 36)
+                .background {
+                    if theme.physicalButtons {
+                        Circle()
+                            .fill(theme.bgTop)
+                            .shadow(color: .black.opacity(hovering ? 0.42 : 0.3),
+                                    radius: hovering ? 3 : 2, y: hovering ? 2 : 1.5)
+                            .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 0.5))
+                    } else if hovering {
+                        Circle().fill(theme.badgeBg)
+                    }
+                }
+        }
+        .buttonStyle(PressScaleStyle())
+        .disabled(!enabled)
+        .help(help)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 

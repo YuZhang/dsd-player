@@ -3,6 +3,7 @@ import Foundation
 
 struct OutputDevice: Identifiable, Hashable {
     let id: AudioDeviceID
+    let uid: String   // 持久 UID：重枚举（睡眠唤醒/重插）后不变，用于重新匹配设备
     let name: String
     let isUSB: Bool
     let supportedRates: [Double]  // 名义采样率范围（取各范围端点并集）
@@ -46,9 +47,28 @@ enum AudioDeviceManager {
         return ids.compactMap { id in
             guard outputStreamCount(id) > 0 else { return nil }
             return OutputDevice(id: id,
+                                uid: deviceUID(id),
                                 name: deviceName(id),
                                 isUSB: transportType(id) == kAudioDeviceTransportTypeUSB,
                                 supportedRates: availableRates(id))
+        }
+    }
+
+    // MARK: 设备列表变更监听（拔插 / 睡眠唤醒重枚举时通知）
+
+    private nonisolated(unsafe) static var deviceListenerInstalled = false
+
+    /// 注册设备列表变更回调（主线程派发），只安装一次
+    static func installDeviceChangeListener(_ callback: @escaping () -> Void) {
+        guard !deviceListenerInstalled else { return }
+        deviceListenerInstalled = true
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                                            &addr, DispatchQueue.main) { _, _ in
+            callback()
         }
     }
 
@@ -87,6 +107,20 @@ enum AudioDeviceManager {
         }
         guard status == noErr else { return "Device \(id)" }
         return name as String
+    }
+
+    private static func deviceUID(_ id: AudioDeviceID) -> String {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var uid: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &uid) { ptr in
+            AudioObjectGetPropertyData(id, &addr, 0, nil, &size, ptr)
+        }
+        guard status == noErr else { return "\(id)" }
+        return uid as String
     }
 
     private static func transportType(_ id: AudioDeviceID) -> UInt32 {
@@ -196,16 +230,31 @@ enum AudioDeviceManager {
                                        UInt32(MemoryLayout<Float64>.size), &rate)
         }
 
-        // DoP 要求位元直通：设备音量必须为 1.0 且取消静音，
-        // 否则 HAL 的音量乘法/静音会破坏标记字节，DAC 无法进入 DSD 模式。
-        // PCM 模式下保留用户音量设置。
-        guard bitPerfect else { return }
+        guard bitPerfect else { return }   // PCM 模式下保留用户音量设置
+        forceBitPerfectVolume(device)
+    }
+
+    // MARK: 音量保存 / 恢复（DoP 强制 1.0 后恢复原音量）
+
+    // 仅从主线程的 play/pause/stop 路径访问，无并发写
+    private nonisolated(unsafe) static var savedVolumes: [AudioDeviceID: [(UInt32, Float32)]] = [:]
+
+    /// DoP 要求位元直通：设备音量必须为 1.0 且取消静音，
+    /// 否则 HAL 的音量乘法/静音会破坏标记字节，DAC 无法进入 DSD 模式。
+    /// 修改前保存原音量，供 restoreVolume 恢复。
+    private static func forceBitPerfectVolume(_ device: AudioDeviceID) {
+        var saved: [(UInt32, Float32)] = []
         for element: UInt32 in [0, 1, 2] {
             var volAddr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyVolumeScalar,
                 mScope: kAudioDevicePropertyScopeOutput,
                 mElement: element)
             if AudioObjectHasProperty(device, &volAddr) {
+                var cur = Float32(1)
+                var sz = UInt32(MemoryLayout<Float32>.size)
+                if AudioObjectGetPropertyData(device, &volAddr, 0, nil, &sz, &cur) == noErr {
+                    saved.append((element, cur))
+                }
                 var one = Float32(1.0)
                 AudioObjectSetPropertyData(device, &volAddr, 0, nil,
                                            UInt32(MemoryLayout<Float32>.size), &one)
@@ -219,6 +268,21 @@ enum AudioDeviceManager {
                 AudioObjectSetPropertyData(device, &muteAddr, 0, nil,
                                            UInt32(MemoryLayout<UInt32>.size), &zero)
             }
+        }
+        if !saved.isEmpty { savedVolumes[device] = saved }
+    }
+
+    /// 恢复进入 DoP 前保存的音量（stop/pause 时调用）
+    static func restoreVolume(_ device: AudioDeviceID) {
+        guard let saved = savedVolumes.removeValue(forKey: device) else { return }
+        for (element, value) in saved {
+            var volAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: element)
+            var v = value
+            AudioObjectSetPropertyData(device, &volAddr, 0, nil,
+                                       UInt32(MemoryLayout<Float32>.size), &v)
         }
     }
 
