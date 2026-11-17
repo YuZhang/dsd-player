@@ -720,7 +720,7 @@ struct ContentView: View {
                 set: { model.setOutputMode($0) }), theme: theme)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
-            // 胶囊底：与分段控件一致地暗示"可点击"；悬停加深。
+            // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
             // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
             HStack(spacing: 0) {
                 Menu {
@@ -741,14 +741,15 @@ struct ContentView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Text(model.selectedDevice?.name ?? "No Device")
+                            .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .frame(height: 28)   // 与输出模式开关同高
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -756,17 +757,20 @@ struct ContentView: View {
                 .onHover { deviceHover = $0 }
             }
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(theme.isDark
-                          ? Color.white.opacity(deviceHover ? 0.28 : 0.16)
-                          : Color.black.opacity(deviceHover ? 0.16 : 0.08))
+                          ? Color.white.opacity(deviceHover ? 0.14 : 0.09)
+                          : Color.black.opacity(deviceHover ? 0.1 : 0.05))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(theme.isDark ? Color.white.opacity(deviceHover ? 0.5 : 0.3)
-                                         : Color.black.opacity(deviceHover ? 0.4 : 0.22),
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(deviceHover
+                            ? theme.accent.opacity(0.6)
+                            : (theme.isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.14)),
                             lineWidth: 1)
             )
+            .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
+                    radius: 2, y: 1.5)   // 拟物皮肤加投影
             .animation(.easeOut(duration: 0.15), value: deviceHover)
             .frame(maxWidth: 240)
             .holeFreeZone()
