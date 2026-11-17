@@ -830,19 +830,9 @@ struct ContentView: View {
         ZStack {
             HStack {
                 HStack(spacing: 8) {
-                    if theme.crtGlow {
-                        // 终端：logo 与光标同步闪烁
-                        TimelineView(.periodic(from: .now, by: 0.8)) { _ in
-                            Image(systemName: "waveform.circle.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(theme.accent)
-                                .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.25)
-                        }
-                    } else {
-                        Image(systemName: "waveform.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(theme.accent)
-                    }
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(theme.accent)
                     Text("DSD Player")
                         .font(.custom("Arial Rounded MT Bold", size: 18))   // 博朗商标风格圆润粗体
                 }
@@ -1040,10 +1030,14 @@ struct ContentView: View {
                                     .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
                             )
                     } else if theme.crtGlow {
-                        // 终端：方形播放/暂停按钮
-                        Image(systemName: model.state == .playing ? "pause.square.fill" : "play.square.fill")
-                            .font(.system(size: 46))
-                            .foregroundStyle(theme.accent)
+                        // 终端：方形播放/暂停按钮（pause.square.fill 不存在，暂停自绘）
+                        if model.state == .playing {
+                            SquarePauseIcon(theme: theme)
+                        } else {
+                            Image(systemName: "play.square.fill")
+                                .font(.system(size: 46))
+                                .foregroundStyle(theme.accent)
+                        }
                     } else {
                         Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 46))
@@ -1232,7 +1226,7 @@ struct ContentView: View {
     }
 
     /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
-    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 92) -> String {
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 130) -> String {
         let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
@@ -1256,6 +1250,24 @@ struct ContentView: View {
             .foregroundStyle(onAccent ? onAccentText
                              : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 方形暂停图标（Terminal：pause.square.fill 不存在，自绘）
+
+struct SquarePauseIcon: View {
+    let theme: Theme
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9)
+                .fill(theme.accent)
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1).fill(theme.bgTop).frame(width: 5, height: 17)
+                RoundedRectangle(cornerRadius: 1).fill(theme.bgTop).frame(width: 5, height: 17)
+            }
+        }
+        .frame(width: 38, height: 38)
+        .shadow(color: theme.accent.opacity(0.5), radius: 4)
     }
 }
 
