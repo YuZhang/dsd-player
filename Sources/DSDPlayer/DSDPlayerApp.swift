@@ -749,13 +749,15 @@ struct ContentView: View {
                             .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
                     }
                     .padding(.horizontal, 10)
-                    .frame(height: 28)   // 与输出模式开关同高
+                    .frame(maxHeight: .infinity)   // 填满外层 28pt 胶囊，保证点击区域撑满
+                    .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .onHover { deviceHover = $0 }
             }
+            .frame(height: 28)   // 固定在外层：Menu 控件自身的 label 度量不吃 frame(height:)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(theme.isDark
