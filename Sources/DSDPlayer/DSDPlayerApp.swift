@@ -744,17 +744,16 @@ struct ContentView: View {
                     Button("Refresh Devices") { model.refreshDevices() }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(model.selectedDevice?.name ?? "No Device")
+                        // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
+                        Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
                             .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 148)   // 限制文字宽度，长名字也留出呼吸空间
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.caption2)
                             .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
+                        Spacer(minLength: 0)   // 内容靠左，右侧留白
                     }
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满外层固定宽度胶囊
+                    .padding(.horizontal, 16)
+                    .frame(width: 200, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
                     .contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
@@ -1076,6 +1075,19 @@ struct ContentView: View {
         case 2: return "Stereo"
         default: return "\(count)ch"
         }
+    }
+
+    /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 112) -> String {
+        let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
+        var s = name
+        while !s.isEmpty,
+              ((s + "…") as NSString).size(withAttributes: attrs).width > maxWidth {
+            s.removeLast()
+        }
+        return s + "…"
     }
 
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false,
