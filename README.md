@@ -17,7 +17,10 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **Formats**: DSF and DFF (DSDIFF) — DSD64 / DSD128 / DSD256, mono and stereo
 - **DoP bit-perfect output**: raw DSD bits packed into DoP v1.1 frames, handed to the DAC untouched — exclusive (hog) mode, forced device rate/format, no mixer, no SRC. Verified on a Topping DX5 II (DAC displays DSD64/128/256)
 - **DSD→PCM mode**: windowed-sinc low-pass + polyphase decimation (DSD64→88.2kHz, DSD128→176.4kHz, DSD256→352.8kHz). Works on any output device; system volume stays usable
-- **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck
+- **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck; multi-select with ⌘/⇧, batch delete via Delete key or context menu, ↑/↓ keyboard navigation
+- **Themed controls**: mode switch, device capsule, progress slider and selection highlight all follow the skin accent color, with hover/press feedback
+- **Device resilience**: USB DAC is auto-preferred with DoP at launch; device hot-unplug/replug and macOS sleep/wake re-enumeration are handled by persistent-UID re-matching — no more stale device IDs
+- **Volume hygiene**: DoP forces the device volume to 1.0 (bit-perfect requirement) and restores your previous volume on pause/stop/quit
 - **Gapless playback**: same-format tracks chain without breaking the audio stream; track changes commit exactly when the boundary reaches the DAC
 - **Click-free transitions**: DSD-silence padding (phase-continuous DoP markers) or PCM fade-in at play/seek/track boundaries
 - **VU meters**: stereo segmented level meters around a center lamp, computed in the render callback (DSD bit-density RMS / PCM RMS), logarithmic scale, red peak zone
@@ -34,7 +37,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
    - **DoP** — bit-perfect DSD to capable DACs; the DAC display should switch to DSD. *Do not touch the system volume in this mode* — any sample manipulation breaks DoP markers; use the DAC/amp volume instead
    - **PCM** — for built-in speakers / Bluetooth / anything else; system volume works normally
 4. **Play**: double-click a track. The list button toggles the playlist; the window shrinks to a compact deck when hidden
-5. If the selected device can't carry the DoP carrier rate, an orange warning icon appears next to the mode picker — hover it for details
+5. If something needs attention (unsupported DoP carrier rate, device disconnected, unreadable files), a warning alert pops up — dismiss with OK
 
 The playlist, current track, play mode, output mode, skin, and playlist visibility are all restored on next launch.
 
