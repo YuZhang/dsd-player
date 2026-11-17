@@ -180,6 +180,10 @@ final class SacdTrackSource: DSDSource {
     private var cachedFrameIndex = -1
     private var cachedFrameData: [UInt8] = []
 
+    /// 帧索引后台构建（打开曲目不再阻塞主线程）；就绪信号
+    private let indexReady = DispatchSemaphore(value: 0)
+    private var indexBuilding = false
+
     /// DST 解码器实例与输出缓冲（解码是异步管线，回调完成后用信号量同步）
     private var decoder: OpaquePointer?   // dst_decoder_t*
     private var decodedOutput = [UInt8]()
@@ -201,7 +205,11 @@ final class SacdTrackSource: DSDSource {
                        channelCount: channelCount,
                        totalSamplesPerChannel: totalBytesPerChannel * 8)
 
-        try buildFrameIndex()
+        // 帧索引后台构建，不阻塞 UI（点击歌曲立即响应）
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            try? buildFrameIndex()
+            indexReady.signal()
+        }
     }
 
     deinit {
@@ -241,6 +249,10 @@ final class SacdTrackSource: DSDSource {
     private func decodeFrame(at frameIndex: Int) throws -> [UInt8] {
         if frameIndex == cachedFrameIndex { return cachedFrameData }
 
+        // 帧索引尚未就绪（后台构建中）：播放线程等待，UI 不受影响
+        if frameStartLSNs.isEmpty {
+            _ = indexReady.wait(timeout: .now() + 10)
+        }
         guard frameIndex >= 0, frameIndex < frameStartLSNs.count else { return [] }
         var lsn = frameStartLSNs[frameIndex]
         let endLSN = track.startLSN + track.lengthLSN
