@@ -708,97 +708,100 @@ struct ContentView: View {
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
     private var header: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(theme.accent)
-                Text("DSD Player")
-                    .font(.headline)
+        ZStack {
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(theme.accent)
+                    Text("DSD Player")
+                        .font(.headline)
+                }
+                .holeFreeZone()
+                .padding(.leading, 64)   // 避开红绿灯按钮
+                Spacer()
+                // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
+                // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
+                HStack(spacing: 0) {
+                    Menu {
+                        ForEach(model.devices) { dev in
+                            Button {
+                                model.selectedDevice = dev
+                            } label: {
+                                let name = dev.name + (dev.isUSB ? " ⚡" : "")
+                                if dev == model.selectedDevice {
+                                    Label(name, systemImage: "checkmark")
+                                } else {
+                                    Text(name)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Refresh Devices") { model.refreshDevices() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
+                            Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
+                                .font(.callout)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
+                            Spacer(minLength: 0)   // 内容靠左，右侧留白
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(width: 184, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .onHover { deviceHover = $0 }
+                }
+                .frame(width: 184, height: 28)   // 固定宽度：设备名变化不跳动
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(theme.isDark
+                              ? Color.white.opacity(deviceHover ? 0.14 : 0.09)
+                              : Color.black.opacity(deviceHover ? 0.1 : 0.05))
+                        // 拟物皮肤加投影（只投影胶囊底，不带文字）
+                        .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
+                                radius: 2, y: 1.5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(deviceHover
+                                ? theme.accent.opacity(0.6)
+                                : (theme.isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.14)),
+                                lineWidth: 1)
+                )
+                .animation(.easeOut(duration: 0.15), value: deviceHover)
+                .holeFreeZone()
+                Menu {
+                    ForEach(Skin.allCases) { skin in
+                        Button {
+                            model.skin = skin
+                        } label: {
+                            if skin == model.skin {
+                                Label(skin.name, systemImage: "checkmark")
+                            } else {
+                                Text(skin.name)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "tshirt")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 28)
+                .help("Skin")
+                .hoverBrightness()
+                .holeFreeZone()
             }
-            .holeFreeZone()
-            .padding(.leading, 64)   // 避开红绿灯按钮
-            Spacer()
+            // 输出模式开关：面板级居中（叠层实现，不受左右内容影响）
             ModePicker(mode: Binding(
                 get: { model.outputMode },
                 set: { model.setOutputMode($0) }), theme: theme)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
-            .holeFreeZone()
-            // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
-            // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
-            HStack(spacing: 0) {
-                Menu {
-                    ForEach(model.devices) { dev in
-                        Button {
-                            model.selectedDevice = dev
-                        } label: {
-                            let name = dev.name + (dev.isUSB ? " ⚡" : "")
-                            if dev == model.selectedDevice {
-                                Label(name, systemImage: "checkmark")
-                            } else {
-                                Text(name)
-                            }
-                        }
-                    }
-                    Divider()
-                    Button("Refresh Devices") { model.refreshDevices() }
-                } label: {
-                    HStack(spacing: 4) {
-                        // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
-                        Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
-                            .font(.callout)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
-                        Spacer(minLength: 0)   // 内容靠左，右侧留白
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(width: 200, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
-                    .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .onHover { deviceHover = $0 }
-            }
-            .frame(width: 200, height: 28)   // 固定宽度：与模式开关对齐，设备名变化不跳动
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(theme.isDark
-                          ? Color.white.opacity(deviceHover ? 0.14 : 0.09)
-                          : Color.black.opacity(deviceHover ? 0.1 : 0.05))
-                    // 拟物皮肤加投影（只投影胶囊底，不带文字）
-                    .shadow(color: theme.physicalButtons ? .black.opacity(0.25) : .clear,
-                            radius: 2, y: 1.5)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(deviceHover
-                            ? theme.accent.opacity(0.6)
-                            : (theme.isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.14)),
-                            lineWidth: 1)
-            )
-            .animation(.easeOut(duration: 0.15), value: deviceHover)
-            .holeFreeZone()
-            Menu {
-                ForEach(Skin.allCases) { skin in
-                    Button {
-                        model.skin = skin
-                    } label: {
-                        if skin == model.skin {
-                            Label(skin.name, systemImage: "checkmark")
-                        } else {
-                            Text(skin.name)
-                        }
-                    }
-                }
-            } label: {
-                Image(systemName: "tshirt")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 28)
-            .help("Skin")
-            .hoverBrightness()
             .holeFreeZone()
         }
         .padding(.horizontal, 16)
@@ -1078,7 +1081,7 @@ struct ContentView: View {
     }
 
     /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
-    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 112) -> String {
+    private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 108) -> String {
         let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
