@@ -604,6 +604,7 @@ struct Theme {
     let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
     let dotGrid: Bool           // 面板点阵纹理（博朗风格）
     let crtGlow: Bool           // CRT 荧光效果（Terminal 皮肤：文字晕光 + 扫描线）
+    let proLook: Bool           // 专业仪器风格（仅 Dark：香槟金/等宽读数/VU 渐变/Bit-Perfect 标识/微渐变）
 }
 
 enum Skin: Int, CaseIterable, Identifiable {
@@ -627,12 +628,13 @@ enum Skin: Int, CaseIterable, Identifiable {
             return Theme(
                 bgTop: Color(red: 0.10, green: 0.09, blue: 0.13),
                 bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
-                accent: Color(red: 0.93, green: 0.68, blue: 0.30),
+                accent: Color(red: 0.85, green: 0.72, blue: 0.45),   // 香槟金（更柔和的丝印金）
                 badgeBg: Color.white.opacity(0.08),
                 isDark: true,
                 physicalButtons: false,
                 dotGrid: false,
-                crtGlow: false)
+                crtGlow: false,
+                proLook: true)
         case .braun:
             // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮、面板点阵
             return Theme(
@@ -643,7 +645,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 isDark: false,
                 physicalButtons: true,
                 dotGrid: false,
-                crtGlow: false)
+                crtGlow: false,
+                proLook: false)
         case .terminal:
             // 绿磷光终端
             return Theme(
@@ -654,7 +657,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 isDark: true,
                 physicalButtons: false,
                 dotGrid: false,
-                crtGlow: true)
+                crtGlow: true,
+                proLook: false)
         }
     }
 }
@@ -794,9 +798,17 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
+    @ViewBuilder
     private var faceplateBackground: some View {
         // 纯色面板：与标题栏（外层背景 bgTop）严格同源同色
-        theme.bgTop
+        if theme.proLook {
+            // 专业仪器：极淡的顶部微亮渐变（金属面板质感）
+            theme.bgTop.overlay(
+                LinearGradient(colors: [Color.white.opacity(0.04), Color.clear],
+                               startPoint: .top, endPoint: .bottom))
+        } else {
+            theme.bgTop
+        }
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
@@ -923,8 +935,17 @@ struct ContentView: View {
                          ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
                          : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
                         .foregroundStyle(theme.accent)
+                    // Bit-Perfect 标识：DoP 位元直通播放时点亮（专业仪器风格）
+                    if theme.proLook {
+                        HStack(spacing: 3) {
+                            Circle().fill(theme.accent).frame(width: 4, height: 4)
+                            Text("Bit-Perfect")
+                        }
+                        .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
+                        .foregroundStyle(theme.accent)
+                    }
                 }
-                .font(.caption.monospacedDigit())
+                .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
                 .crtGlowText(theme)
                 .holeFreeZone()
             } else {
@@ -1552,6 +1573,12 @@ struct VUMeter: View {
     }
 
     private func segmentColor(_ pos: Double) -> Color {
+        if theme.proLook {
+            // 专业电平表配色：绿区安全 → 黄区余量 → 红区峰值
+            if pos > 0.85 { return Color(red: 0.9, green: 0.3, blue: 0.25) }
+            if pos > 0.55 { return Color(red: 0.9, green: 0.7, blue: 0.3) }
+            return Color(red: 0.35, green: 0.78, blue: 0.45)
+        }
         if pos > 0.9 { return .red.opacity(0.9) }   // 峰值区红色警示
         return theme.accent
     }
