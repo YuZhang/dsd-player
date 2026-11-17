@@ -42,6 +42,9 @@ enum SacdISOError: Error, LocalizedError {
 final class SacdISO {
     private let file: FileHandle
     let album: SacdAlbumInfo
+    /// 同一 ISO 的所有曲目共享一个 FileHandle，seek+read 非原子，必须串行化
+    ///（无缝预排会在播放当前曲目的同时打开下一首，共享句柄并发读会读花数据）
+    let readLock = NSLock()
 
     init(url: URL) throws {
         file = try FileHandle(forReadingFrom: url)
@@ -120,7 +123,7 @@ final class SacdISO {
     }
 
     func makeTrackSource(_ track: SacdTrack) throws -> SacdTrackSource {
-        try SacdTrackSource(file: file, track: track,
+        try SacdTrackSource(file: file, readLock: readLock, track: track,
                             channelCount: album.channelCount, dstEncoded: album.dstEncoded)
     }
 
@@ -162,6 +165,7 @@ final class SacdTrackSource: DSDSource {
     let totalBytesPerChannel: UInt64
 
     private let file: FileHandle
+    private let readLock: NSLock   // 与同一 ISO 的其他曲目共享的读锁
     private let track: SacdTrack
     private let channels: Int
     private let dstEncoded: Bool
@@ -182,8 +186,9 @@ final class SacdTrackSource: DSDSource {
     private let decodeSemaphore = DispatchSemaphore(value: 0)
     private var decodeError: String?
 
-    init(file: FileHandle, track: SacdTrack, channelCount: Int, dstEncoded: Bool) throws {
+    init(file: FileHandle, readLock: NSLock, track: SacdTrack, channelCount: Int, dstEncoded: Bool) throws {
         self.file = file
+        self.readLock = readLock
         self.track = track
         self.channels = channelCount
         self.dstEncoded = dstEncoded
@@ -203,13 +208,20 @@ final class SacdTrackSource: DSDSource {
         if let decoder { dst_decoder_destroy(decoder) }
     }
 
+    /// 加锁读扇区：FileHandle 的 seek+read 非原子，多曲目共享句柄时必须串行
+    private func readSector(_ lsn: UInt64) throws -> [UInt8] {
+        readLock.lock()
+        defer { readLock.unlock() }
+        return try file.readAt(lsn * 2048, count: 2048)
+    }
+
     /// 扫描曲目所有扇区，记录每帧的起始扇区（仅解析包头，不读音频负载，速度快）
     private func buildFrameIndex() throws {
         var index: [UInt64] = []
         let endLSN = track.startLSN + track.lengthLSN
         var lsn = track.startLSN
         while lsn < endLSN {
-            let sector = try file.readAt(lsn * 2048, count: 2048)
+            let sector = try readSector(lsn)
             guard sector.count == 2048 else { break }
             let packetInfoCount = Int((sector[0] >> 5) & 7)
             for i in 0..<packetInfoCount {
@@ -239,7 +251,7 @@ final class SacdTrackSource: DSDSource {
         var done = false
 
         while lsn < endLSN && !done {
-            let sector = try file.readAt(lsn * 2048, count: 2048)
+            let sector = try readSector(lsn)
             guard sector.count == 2048 else { break }
             let packetInfoCount = Int((sector[0] >> 5) & 7)
             let frameInfoCount = Int((sector[0] >> 2) & 7)
@@ -276,6 +288,12 @@ final class SacdTrackSource: DSDSource {
                 if started {
                     frameData.append(contentsOf: sector[pktOffset..<(pktOffset + packetLength)])
                     if dstFlag { sectorCount -= 1 }
+                    // 防御：DST 解码器输入缓冲池只有 64KB，帧异常时截断而不是堆溢出
+                    if frameData.count > 64 * 1024 {
+                        print("SACD frame overflow at track \(track.index), frame \(frameIndex), size \(frameData.count)")
+                        done = true
+                        break
+                    }
                 }
             }
             lsn += 1
