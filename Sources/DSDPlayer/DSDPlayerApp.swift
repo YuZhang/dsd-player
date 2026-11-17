@@ -842,15 +842,14 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 Text(formatTime(model.position))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Slider(value: Binding(
-                    get: { model.position },
-                    set: { model.position = $0 }
-                ), in: 0...max(1, model.currentInfo?.durationSeconds ?? 1),
-                onEditingChanged: { editing in
-                    if !editing { model.seek(to: model.position) }
-                })
-                .tint(theme.accent)
-                .disabled(model.state == .idle)
+                ThemedSlider(
+                    value: Binding(
+                        get: { model.position },
+                        set: { model.position = $0 }),
+                    upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
+                    enabled: model.state != .idle,
+                    theme: theme,
+                    onEditingEnded: { model.seek(to: model.position) })
                 Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
@@ -1092,6 +1091,67 @@ struct ContentView: View {
             .foregroundStyle(onAccent ? onAccentText
                              : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 主题化进度滑杆
+
+/// 主题化进度条：主题色轨道填充 + 旋钮；悬停/拖动时旋钮放大；点击跳转
+struct ThemedSlider: View {
+    @Binding var value: Double
+    var upperBound: Double
+    var enabled: Bool = true
+    let theme: Theme
+    var onEditingEnded: () -> Void = {}
+
+    @State private var dragging = false
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let frac = upperBound > 0 ? min(1, max(0, value / upperBound)) : 0
+            let knobD: CGFloat = dragging ? 18 : (hovering ? 16 : 13)
+            ZStack(alignment: .leading) {
+                // 轨道
+                Capsule().fill(theme.badgeBg).frame(height: 4)
+                Capsule().fill(theme.accent.opacity(enabled ? 0.9 : 0.4))
+                    .frame(width: max(0, frac * w), height: 4)
+                // 旋钮
+                knob(diameter: knobD)
+                    .offset(x: frac * (w - knobD))
+                    .animation(.easeOut(duration: 0.15), value: dragging)
+                    .animation(.easeOut(duration: 0.12), value: hovering)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(enabled ? DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    dragging = true
+                    value = max(0, min(upperBound, Double(g.location.x / w) * upperBound))
+                }
+                .onEnded { _ in
+                    dragging = false
+                    onEditingEnded()
+                } : nil)
+            .onHover { hovering = $0 }
+        }
+        .frame(height: 20)
+        .opacity(enabled ? 1 : 0.45)
+    }
+
+    private func knob(diameter d: CGFloat) -> some View {
+        Circle()
+            .fill(theme.physicalButtons ? Color.white : theme.accent)
+            .frame(width: d, height: d)
+            .overlay(
+                Circle().stroke(theme.physicalButtons ? theme.accent : .clear,
+                                lineWidth: theme.physicalButtons ? 2 : 0)
+            )
+            .shadow(color: theme.physicalButtons ? .black.opacity(0.3)
+                    : theme.accent.opacity(dragging ? 0.6 : 0.3),
+                    radius: theme.physicalButtons ? 2 : (dragging ? 4 : 2),
+                    y: theme.physicalButtons ? 1.5 : 0)
     }
 }
 
