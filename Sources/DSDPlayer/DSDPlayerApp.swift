@@ -84,6 +84,7 @@ final class PlayerModel: ObservableObject {
     private var timer: Timer?
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
+    private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
 
     // MARK: 持久化
 
@@ -164,6 +165,35 @@ final class PlayerModel: ObservableObject {
         setupRemoteCommands()
         restore()
         applyLaunchDevicePolicy()
+        // 设备列表变更监听：拔插 / 睡眠唤醒后系统会重枚举设备（id 变化），
+        // 按持久 UID 重新匹配，避免绑定到失效的旧 id 导致无法播放
+        AudioDeviceManager.installDeviceChangeListener { [weak self] in
+            Task { @MainActor in self?.handleDeviceChange() }
+        }
+    }
+
+    /// 设备列表变化：同 UID 设备换新 id 则透明更新；正在播放的设备消失则停止
+    private func handleDeviceChange() {
+        let prevUID = selectedDevice?.uid
+        devices = AudioDeviceManager.outputDevices()
+        if let uid = prevUID, let match = devices.first(where: { $0.uid == uid }) {
+            selectedDevice = match   // 同一物理设备，id 可能已变
+        } else if let cur = selectedDevice, devices.contains(cur) {
+            // 保持不变
+        } else if let def = AudioDeviceManager.defaultOutputDevice(),
+                  let dev = devices.first(where: { $0.id == def }) {
+            selectedDevice = dev
+        } else {
+            selectedDevice = devices.first(where: { $0.isUSB }) ?? devices.first
+        }
+        // 正在播放/暂停的设备被拔出：停止并提示
+        if let puid = playingDeviceUID, state == .playing || state == .paused,
+           !devices.contains(where: { $0.uid == puid }) {
+            engine.stop()
+            state = .stopped
+            playingDeviceUID = nil
+            statusMessage = "Output device disconnected"
+        }
     }
 
     /// 启动设备策略：有 USB DAC 时选它并用 DoP 位元直通，否则用 PCM 模式（任意设备可用）
@@ -394,6 +424,7 @@ final class PlayerModel: ObservableObject {
         guard currentInfo != nil, statusMessage.isEmpty else { return }
         do {
             try engine.play(device: dev.id)
+            playingDeviceUID = dev.uid
             queueNextForGapless()
             updateNowPlaying()
         } catch {

@@ -6,6 +6,7 @@ enum DSDError: Error, LocalizedError {
     case unsupportedChannels(Int)
     case unsupportedSampleRate(UInt32)
     case dstCompressed
+    case outputDevice(String)
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ enum DSDError: Error, LocalizedError {
         case .unsupportedChannels(let n): return "\(n) channels not supported (mono/stereo only)"
         case .unsupportedSampleRate(let r): return "Unsupported DSD sample rate: \(r) Hz"
         case .dstCompressed: return "DST-compressed DFF files are not supported"
+        case .outputDevice(let s): return "Output device error: \(s)"
         }
     }
 }

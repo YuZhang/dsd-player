@@ -3,6 +3,7 @@ import Foundation
 
 struct OutputDevice: Identifiable, Hashable {
     let id: AudioDeviceID
+    let uid: String   // 持久 UID：重枚举（睡眠唤醒/重插）后不变，用于重新匹配设备
     let name: String
     let isUSB: Bool
     let supportedRates: [Double]  // 名义采样率范围（取各范围端点并集）
@@ -46,9 +47,28 @@ enum AudioDeviceManager {
         return ids.compactMap { id in
             guard outputStreamCount(id) > 0 else { return nil }
             return OutputDevice(id: id,
+                                uid: deviceUID(id),
                                 name: deviceName(id),
                                 isUSB: transportType(id) == kAudioDeviceTransportTypeUSB,
                                 supportedRates: availableRates(id))
+        }
+    }
+
+    // MARK: 设备列表变更监听（拔插 / 睡眠唤醒重枚举时通知）
+
+    private nonisolated(unsafe) static var deviceListenerInstalled = false
+
+    /// 注册设备列表变更回调（主线程派发），只安装一次
+    static func installDeviceChangeListener(_ callback: @escaping () -> Void) {
+        guard !deviceListenerInstalled else { return }
+        deviceListenerInstalled = true
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                                            &addr, DispatchQueue.main) { _, _ in
+            callback()
         }
     }
 
@@ -87,6 +107,20 @@ enum AudioDeviceManager {
         }
         guard status == noErr else { return "Device \(id)" }
         return name as String
+    }
+
+    private static func deviceUID(_ id: AudioDeviceID) -> String {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var uid: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        let status = withUnsafeMutablePointer(to: &uid) { ptr in
+            AudioObjectGetPropertyData(id, &addr, 0, nil, &size, ptr)
+        }
+        guard status == noErr else { return "\(id)" }
+        return uid as String
     }
 
     private static func transportType(_ id: AudioDeviceID) -> UInt32 {
