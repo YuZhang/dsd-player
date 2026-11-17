@@ -626,8 +626,8 @@ enum Skin: Int, CaseIterable, Identifiable {
         switch self {
         case .dark:
             return Theme(
-                bgTop: Color(red: 0.10, green: 0.09, blue: 0.13),
-                bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
+                bgTop: Color(red: 0.0706, green: 0.0706, blue: 0.0706),   // #121212
+                bgBottom: Color(red: 0.0706, green: 0.0706, blue: 0.0706),
                 accent: Color(red: 0.93, green: 0.68, blue: 0.30),   // 保持原金色
                 badgeBg: Color.white.opacity(0.08),
                 isDark: true,
