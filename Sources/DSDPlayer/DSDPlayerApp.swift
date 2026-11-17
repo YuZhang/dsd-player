@@ -1480,27 +1480,38 @@ struct VUMeter: View {
     private let segments = 28   // 每侧段数（组件总宽不变）
 
     var body: some View {
-        HStack(spacing: 6) {
-            // 左声道：从中间向左增长
-            HStack(spacing: 1.5) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let fromCenter = Double(segments - 1 - i) / Double(segments)  // 0=靠中间
-                    segment(lit: fromCenter < norm(left), pos: fromCenter)
+        // Canvas 绘制：段宽对齐到整像素，避免 HStack 分配小数宽度导致粗细不均
+        Canvas { ctx, size in
+            let lampD: CGFloat = 13
+            let gap: CGFloat = 6
+            let sideW = (size.width - lampD - gap * 2) / 2
+            let n = segments
+            let spacing: CGFloat = 1.5
+            // 段宽向下取 0.5pt 整数倍（Retina 下 = 整像素）
+            let segW = ((sideW - spacing * CGFloat(n - 1)) / CGFloat(n) * 2).rounded(.down) / 2
+            let step = segW + spacing
+            let actualW = step * CGFloat(n) - spacing
+
+            func drawSide(leftX: CGFloat, level: Double, mirrored: Bool) {
+                for i in 0..<n {
+                    let fromCenter = mirrored ? Double(n - 1 - i) / Double(n) : Double(i) / Double(n)
+                    let lit = fromCenter < norm(level)
+                    let rect = CGRect(x: leftX + CGFloat(i) * step,
+                                      y: 0, width: segW, height: size.height)
+                    let path = Path(roundedRect: rect, cornerRadius: 1.5)
+                    ctx.fill(path, with: .color(lit ? segmentColor(fromCenter) : theme.badgeBg))
                 }
             }
-            // 中央指示灯：播放时亮起
-            Circle()
-                .fill(isPlaying ? theme.accent : theme.badgeBg)
-                .frame(width: 13, height: 13)
-                .shadow(color: isPlaying ? theme.accent.opacity(0.8) : .clear,
-                        radius: 5)
-            // 右声道：从中间向右增长
-            HStack(spacing: 1.5) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let fromCenter = Double(i) / Double(segments)
-                    segment(lit: fromCenter < norm(right), pos: fromCenter)
-                }
-            }
+
+            // 左声道（从中间向左增长）
+            drawSide(leftX: (sideW - actualW) / 2, level: left, mirrored: true)
+            // 中央指示灯
+            let lampRect = CGRect(x: sideW + gap, y: (size.height - lampD) / 2,
+                                  width: lampD, height: lampD)
+            ctx.fill(Path(ellipseIn: lampRect),
+                     with: .color(isPlaying ? theme.accent : theme.badgeBg))
+            // 右声道
+            drawSide(leftX: size.width - actualW - (sideW - actualW) / 2, level: right, mirrored: false)
         }
         .frame(height: 13)
     }
@@ -1509,12 +1520,6 @@ struct VUMeter: View {
     private func norm(_ level: Double) -> Double {
         let db = 20 * log10(max(level, 1e-6))
         return max(0, (db + 60) / 60)
-    }
-
-    private func segment(lit: Bool, pos: Double) -> some View {
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(lit ? segmentColor(pos) : theme.badgeBg)
-            .frame(maxWidth: .infinity)
     }
 
     private func segmentColor(_ pos: Double) -> Color {
