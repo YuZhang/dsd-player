@@ -715,15 +715,9 @@ struct ContentView: View {
             .holeFreeZone()
             .padding(.leading, 64)   // 避开红绿灯按钮
             Spacer()
-            Picker("", selection: Binding(
+            ModePicker(mode: Binding(
                 get: { model.outputMode },
-                set: { model.setOutputMode($0) })) {
-                Text("DoP").tag(OutputMode.dop)
-                Text("PCM").tag(OutputMode.pcm)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 130)
+                set: { model.setOutputMode($0) }), theme: theme)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
             // 胶囊底：与分段控件一致地暗示"可点击"；悬停加深。
@@ -1057,6 +1051,55 @@ struct ContentView: View {
             .background(highlight ? theme.accent.opacity(0.22) : theme.badgeBg)
             .foregroundStyle(highlight ? theme.accent : Color.primary.opacity(0.75))
             .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+// MARK: - 主题化输出模式开关
+
+/// DoP/PCM 分段开关：选中段用主题强调色，轨道用主题底色，随皮肤变化
+struct ModePicker: View {
+    @Binding var mode: OutputMode
+    let theme: Theme
+    @State private var hovering: OutputMode?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            segment("DoP", .dop)
+            segment("PCM", .pcm)
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.badgeBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.isDark ? Color.white.opacity(0.1) : Color.black.opacity(0.1),
+                        lineWidth: 0.5)
+        )
+    }
+
+    private func segment(_ label: String, _ value: OutputMode) -> some View {
+        let selected = mode == value
+        return Button { mode = value } label: {
+            Text(label)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected
+                                 ? (theme.isDark ? Color.black.opacity(0.85) : Color.white)
+                                 : Color.primary.opacity(hovering == value ? 0.9 : 0.55))
+                .frame(width: 52, height: 22)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(theme.accent)
+                            .shadow(color: theme.accent.opacity(0.5), radius: theme.physicalButtons ? 0 : 4)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 ? value : nil }
+        .animation(.easeOut(duration: 0.15), value: mode)
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
