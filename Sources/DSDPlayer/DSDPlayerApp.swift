@@ -790,10 +790,9 @@ struct ContentView: View {
                         .font(.system(size: 22))
                         .foregroundStyle(theme.accent)
                     Text("DSD Player")
-                        .font(.headline)
+                        .font(.custom("Arial Rounded MT Bold", size: 18))   // 博朗商标风格圆润粗体
                 }
                 .holeFreeZone()
-                .padding(.leading, 64)   // 避开红绿灯按钮
                 Spacer()
                 // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
                 // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
