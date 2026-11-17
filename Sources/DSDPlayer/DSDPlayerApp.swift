@@ -1094,7 +1094,7 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 8)
                 }
-                .frame(height: 400)   // 固定高度：恰好 10 首
+                .frame(height: 360)   // 固定高度：约 10 行
             }
         }
         .frame(maxWidth: .infinity)
