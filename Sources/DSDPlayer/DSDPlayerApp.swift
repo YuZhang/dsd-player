@@ -603,6 +603,7 @@ struct Theme {
     let isDark: Bool
     let physicalButtons: Bool   // 拟物按钮（圆形凸起 + 阴影）
     let dotGrid: Bool           // 面板点阵纹理（博朗风格）
+    let crtGlow: Bool           // CRT 荧光效果（Terminal 皮肤：文字晕光 + 扫描线）
 }
 
 enum Skin: Int, CaseIterable, Identifiable {
@@ -630,7 +631,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.white.opacity(0.08),
                 isDark: true,
                 physicalButtons: false,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: false)
         case .braun:
             // 博朗复古设备：暖米白机身、橙红按键、拟物圆形按钮、面板点阵
             return Theme(
@@ -640,7 +642,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color.black.opacity(0.07),
                 isDark: false,
                 physicalButtons: true,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: false)
         case .terminal:
             // 绿磷光终端
             return Theme(
@@ -650,7 +653,8 @@ enum Skin: Int, CaseIterable, Identifiable {
                 badgeBg: Color(red: 0.24, green: 0.94, blue: 0.45).opacity(0.12),
                 isDark: true,
                 physicalButtons: false,
-                dotGrid: false)
+                dotGrid: false,
+                crtGlow: true)
         }
     }
 }
@@ -713,6 +717,20 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
         )
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        // CRT 扫描线（Terminal 皮肤）
+        .overlay {
+            if theme.crtGlow {
+                Canvas { ctx, size in
+                    var y: CGFloat = 0
+                    while y < size.height {
+                        ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)),
+                                 with: .color(.black.opacity(0.10)))
+                        y += 3
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
         // 告警：出现新告警时弹窗（顶栏不再有常驻告警图标）；
         // onAppear 兜底处理启动时（视图挂载前）就存在的告警
         .onChange(of: model.warningText) { _, new in
@@ -889,6 +907,7 @@ struct ContentView: View {
             MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
                         font: .title3.weight(.semibold))
                 .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                .crtGlowText(theme)
                 .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
                 .holeFreeZone()
 
@@ -906,6 +925,7 @@ struct ContentView: View {
                         .foregroundStyle(theme.accent)
                 }
                 .font(.caption.monospacedDigit())
+                .crtGlowText(theme)
                 .holeFreeZone()
             } else {
                 Text("Add .dsf / .dff files to start playing")
@@ -1102,6 +1122,7 @@ struct ContentView: View {
                 .fill(isSelected ? theme.accent.opacity(0.9) : Color.clear)
         )
         .frame(height: 34)
+        .crtGlowText(theme)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
@@ -1277,6 +1298,7 @@ struct ModePicker: View {
                                  ? (theme.isDark ? Color.black.opacity(0.85) : Color.white)
                                  : Color.primary.opacity(hovering == value ? 0.9 : 0.55))
                 .frame(width: 52, height: 22)
+                .crtGlowText(theme)
                 .background {
                     if selected {
                         RoundedRectangle(cornerRadius: 6)
@@ -1301,6 +1323,13 @@ struct PressScaleStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.9 : 1)
             .opacity(configuration.isPressed ? 0.8 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// CRT 荧光文字晕光（仅 Terminal 皮肤）
+extension View {
+    func crtGlowText(_ theme: Theme) -> some View {
+        shadow(color: theme.crtGlow ? theme.accent.opacity(0.65) : .clear, radius: 2.5)
     }
 }
 
@@ -1337,6 +1366,7 @@ struct TransportButton: View {
             Image(systemName: icon)
                 .font(.system(size: size, weight: theme.physicalButtons ? .semibold : .regular))
                 .foregroundStyle(active ? theme.accent : Color.primary.opacity(hovering ? 1.0 : 0.85))
+                .crtGlowText(theme)
                 .frame(width: 36, height: 36)
                 .background {
                     if theme.physicalButtons {
