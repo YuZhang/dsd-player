@@ -628,7 +628,7 @@ enum Skin: Int, CaseIterable, Identifiable {
             return Theme(
                 bgTop: Color(red: 0.10, green: 0.09, blue: 0.13),
                 bgBottom: Color(red: 0.06, green: 0.06, blue: 0.09),
-                accent: Color(red: 0.85, green: 0.72, blue: 0.45),   // 香槟金（更柔和的丝印金）
+                accent: Color(red: 0.93, green: 0.68, blue: 0.30),   // 保持原金色
                 badgeBg: Color.white.opacity(0.08),
                 isDark: true,
                 physicalButtons: false,
