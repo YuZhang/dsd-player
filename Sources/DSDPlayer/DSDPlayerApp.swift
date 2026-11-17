@@ -830,9 +830,19 @@ struct ContentView: View {
         ZStack {
             HStack {
                 HStack(spacing: 8) {
-                    Image(systemName: "waveform.circle.fill")
-                        .font(.system(size: 22))
-                        .foregroundStyle(theme.accent)
+                    if theme.crtGlow {
+                        // 终端：logo 与光标同步闪烁
+                        TimelineView(.periodic(from: .now, by: 0.8)) { _ in
+                            Image(systemName: "waveform.circle.fill")
+                                .font(.system(size: 22))
+                                .foregroundStyle(theme.accent)
+                                .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.25)
+                        }
+                    } else {
+                        Image(systemName: "waveform.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(theme.accent)
+                    }
                     Text("DSD Player")
                         .font(.custom("Arial Rounded MT Bold", size: 18))   // 博朗商标风格圆润粗体
                 }
@@ -930,16 +940,13 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 4) {
-                MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
-                            font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold))
-                    .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
-                    .crtGlowText(theme)
-                    .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
-                    .holeFreeZone()
-                // 终端风格闪烁方块光标
-                if theme.crtGlow { BlinkingCursor(theme: theme) }
-            }
+            MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
+                        font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
+                        showCursor: theme.crtGlow, cursorColor: theme.accent)
+                .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                .crtGlowText(theme)
+                .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
+                .holeFreeZone()
 
             if let info = model.currentInfo {
                 // 信号链：源规格 → 输出方式与载波率
@@ -1032,6 +1039,11 @@ struct ContentView: View {
                                     .fill(theme.accent)
                                     .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
                             )
+                    } else if theme.crtGlow {
+                        // 终端：方形播放/暂停按钮
+                        Image(systemName: model.state == .playing ? "pause.square.fill" : "play.square.fill")
+                            .font(.system(size: 46))
+                            .foregroundStyle(theme.accent)
                     } else {
                         Image(systemName: model.state == .playing ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 46))
@@ -1244,21 +1256,6 @@ struct ContentView: View {
             .foregroundStyle(onAccent ? onAccentText
                              : (highlight ? theme.accent : Color.primary.opacity(0.75)))
             .clipShape(RoundedRectangle(cornerRadius: 4))
-    }
-}
-
-// MARK: - 闪烁方块光标（Terminal 皮肤）
-
-struct BlinkingCursor: View {
-    let theme: Theme
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.8)) { _ in
-            Text("▋")
-                .font(.custom("Menlo-Bold", size: 15))
-                .foregroundStyle(theme.accent)
-                .crtGlowText(theme)
-                .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.1)
-        }
     }
 }
 
@@ -1516,6 +1513,8 @@ private struct WindowConfigurator: NSViewRepresentable {
 struct MarqueeText: View {
     let text: String
     var font: Font = .title3.weight(.semibold)
+    var showCursor = false      // Terminal 皮肤：光标紧跟文字末尾
+    var cursorColor: Color = .primary
 
     @State private var startDate = Date()
 
@@ -1532,23 +1531,36 @@ struct MarqueeText: View {
             if overflow > 0 {
                 // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
                 TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
-                    Text(text)
-                        .font(font)
-                        .lineLimit(1)
+                    contentWithCursor
                         .fixedSize()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .offset(x: -scrollDistance(at: context.date, overflow: overflow))
                 }
             } else {
-                Text(text)
-                    .font(font)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity)   // 短文本居中
+                contentWithCursor
+                    .frame(maxWidth: .infinity)   // 短文本居中（光标紧跟文字）
             }
         }
         .frame(height: 26)
         .clipped()
         .onChange(of: text) { startDate = Date() }
+    }
+
+    @ViewBuilder
+    private var contentWithCursor: some View {
+        HStack(spacing: 2) {
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+            if showCursor {
+                TimelineView(.periodic(from: .now, by: 0.8)) { _ in
+                    Text("▋")
+                        .font(font)
+                        .foregroundStyle(cursorColor)
+                        .opacity(Int(Date().timeIntervalSince1970 / 0.8) % 2 == 0 ? 1 : 0.1)
+                }
+            }
+        }
     }
 
     private func scrollDistance(at date: Date, overflow: CGFloat) -> CGFloat {
