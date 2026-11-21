@@ -135,8 +135,11 @@ final class PlayerModel: ObservableObject {
                       crtGlow: t.crtGlow, proLook: t.proLook)
         }
         if let hex = customBgHex, let c = Color(hex: hex) {
-            t = Theme(bgTop: c, bgBottom: c, accent: t.accent, badgeBg: t.badgeBg,
-                      isDark: t.isDark, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
+            // 浅色背景：切换为浅色模式（主文字变深），徽标底色反转
+            let light = luminance(c) > 0.45
+            t = Theme(bgTop: c, bgBottom: c, accent: t.accent,
+                      badgeBg: light ? Color.black.opacity(0.07) : Color.white.opacity(0.08),
+                      isDark: !light, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
                       crtGlow: t.crtGlow, proLook: t.proLook)
         }
         return t
