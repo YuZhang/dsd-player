@@ -692,7 +692,7 @@ enum Skin: Int, CaseIterable, Identifiable {
 
     var name: String {
         switch self {
-        case .dark: return "Dark (Default)"
+        case .dark: return "Default"
         case .braun: return "Braun Retro"
         case .terminal: return "Terminal Green"
         }
