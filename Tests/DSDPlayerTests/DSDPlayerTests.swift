@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import DSDPlayer
 
 final class DSDPlayerTests: XCTestCase {
@@ -251,9 +252,23 @@ final class DSDPlayerTests: XCTestCase {
         XCTAssertEqual(Skin(rawValue: s.skin ?? 0) ?? .dark, .dark)
     }
 
+    func testColorHexRoundTrip() throws {
+        // hex 解析与序列化往返
+        let c = Color(hex: "#EDB54D")
+        XCTAssertNotNil(c)
+        XCTAssertEqual(c?.hexString, "#EDB54D")
+        // 带 # 不带 # 均可解析
+        XCTAssertNotNil(Color(hex: "121212"))
+        XCTAssertNil(Color(hex: "xyz"))
+        // 亮度：亮色 onAccent 为深字，暗色为白字
+        XCTAssertGreaterThan(luminance(Color.white), 0.45)
+        XCTAssertLessThan(luminance(Color.black), 0.45)
+    }
+
     func testSavedStateRoundTrip() throws {
         let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
-                                  playMode: 3, outputMode: 1, skin: 1, showPlaylist: false)
+                                  playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
+                                  customAccent: "#FF8800", customBg: "#121212")
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(SavedState.self, from: data)
         XCTAssertEqual(decoded, original)

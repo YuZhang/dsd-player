@@ -12,6 +12,8 @@ struct SavedState: Codable, Equatable {
     let outputMode: Int
     let skin: Int?          // 旧版本数据无此字段，解码为 nil 时用默认
     let showPlaylist: Bool? // 同上
+    let customAccent: String?   // Dark 皮肤自定义强调色（hex），nil = 默认
+    let customBg: String?       // Dark 皮肤自定义背景色（hex）
 }
 
 // MARK: - 播放模式
@@ -102,6 +104,44 @@ final class PlayerModel: ObservableObject {
     private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
     private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径）
 
+    // MARK: Dark 皮肤自定义颜色（仅 Dark 皮肤生效）
+    @Published var customAccentHex: String?
+    @Published var customBgHex: String?
+
+    /// 应用自定义强调色（实时预览）
+    func setCustomAccent(_ color: Color) {
+        customAccentHex = color.hexString
+        persist()
+    }
+    /// 应用自定义背景色（实时预览）
+    func setCustomBg(_ color: Color) {
+        customBgHex = color.hexString
+        persist()
+    }
+    /// 恢复 Dark 默认配色（金色 + #121212）
+    func resetCustomColors() {
+        customAccentHex = nil
+        customBgHex = nil
+        persist()
+    }
+
+    /// 生效主题：Dark 皮肤叠加自定义颜色，其他皮肤用固定定义
+    var effectiveTheme: Theme {
+        var t = skin.theme
+        guard skin == .dark else { return t }
+        if let hex = customAccentHex, let c = Color(hex: hex) {
+            t = Theme(bgTop: t.bgTop, bgBottom: t.bgBottom, accent: c, badgeBg: t.badgeBg,
+                      isDark: t.isDark, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
+                      crtGlow: t.crtGlow, proLook: t.proLook)
+        }
+        if let hex = customBgHex, let c = Color(hex: hex) {
+            t = Theme(bgTop: c, bgBottom: c, accent: t.accent, badgeBg: t.badgeBg,
+                      isDark: t.isDark, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
+                      crtGlow: t.crtGlow, proLook: t.proLook)
+        }
+        return t
+    }
+
     /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource
     func openSource(for item: PlaylistItem) -> DSDSource? {
         if let trackIdx = item.isoTrackIndex {
@@ -135,7 +175,9 @@ final class PlayerModel: ObservableObject {
                                playMode: playMode.rawValue,
                                outputMode: outputMode.rawValue,
                                skin: skin.rawValue,
-                               showPlaylist: showPlaylist)
+                               showPlaylist: showPlaylist,
+                               customAccent: customAccentHex,
+                               customBg: customBgHex)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -152,6 +194,8 @@ final class PlayerModel: ObservableObject {
         showPlaylist = saved.showPlaylist ?? true
         outputMode = OutputMode(rawValue: saved.outputMode) ?? .dop
         engine.outputMode = outputMode
+        customAccentHex = saved.customAccent
+        customBgHex = saved.customBg
         var items: [PlaylistItem] = []
         var missing = 0
         for path in saved.paths {
@@ -605,6 +649,35 @@ struct Theme {
     let dotGrid: Bool           // 面板点阵纹理（博朗风格）
     let crtGlow: Bool           // CRT 荧光效果（Terminal 皮肤：文字晕光 + 扫描线）
     let proLook: Bool           // 专业仪器风格（仅 Dark：香槟金/等宽读数/VU 渐变/Bit-Perfect 标识/微渐变）
+
+    /// 强调色上的对比文字色：按亮度选黑/白
+    var onAccent: Color {
+        luminance(accent) > 0.45 ? Color.black.opacity(0.85) : .white
+    }
+}
+
+/// 颜色亮度（0...1，用于对比文字自适应）
+func luminance(_ color: Color) -> Double {
+    guard let c = NSColor(color).usingColorSpace(.sRGB) else { return 1 }
+    return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+}
+
+extension Color {
+    init?(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt64(s, radix: 16) else { return nil }
+        self = Color(red: Double((v >> 16) & 0xFF) / 255,
+                     green: Double((v >> 8) & 0xFF) / 255,
+                     blue: Double(v & 0xFF) / 255)
+    }
+    var hexString: String? {
+        guard let c = NSColor(self).usingColorSpace(.sRGB) else { return nil }
+        return String(format: "#%02X%02X%02X",
+                      Int((c.redComponent * 255).rounded()),
+                      Int((c.greenComponent * 255).rounded()),
+                      Int((c.blueComponent * 255).rounded()))
+    }
 }
 
 enum Skin: Int, CaseIterable, Identifiable {
@@ -672,8 +745,9 @@ struct ContentView: View {
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
     @State private var deviceHover = false
+    @State private var showColorPanel = false   // 颜色定制面板
 
-    private var theme: Theme { model.skin.theme }
+    private var theme: Theme { model.effectiveTheme }
 
     /// 时间字体：Terminal 用液晶数字（DB LCD Temp）并放大
     private var timeFont: Font {
@@ -905,6 +979,8 @@ struct ContentView: View {
                             }
                         }
                     }
+                    Divider()
+                    Button("Custom Colors…") { showColorPanel = true }
                 } label: {
                     Image(systemName: "tshirt")
                 }
@@ -914,6 +990,9 @@ struct ContentView: View {
                 .help("Skin")
                 .hoverBrightness()
                 .holeFreeZone()
+                .popover(isPresented: $showColorPanel, arrowEdge: .bottom) {
+                    ColorPanelView(model: model)
+                }
             }
             // 输出模式开关：面板级居中（叠层实现，不受左右内容影响）
             ModePicker(mode: Binding(
@@ -1143,8 +1222,8 @@ struct ContentView: View {
     private func playlistRow(idx: Int, item: PlaylistItem) -> some View {
         let isSelected = selection.contains(item.id)
         let isCurrent = model.currentIndex == idx
-        // 选中底上的对比文字色：深色皮肤用深字，浅色皮肤用白字
-        let onAccent: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        // 选中底上的对比文字色：按强调色亮度自适应
+        let onAccent: Color = theme.onAccent
         return HStack(spacing: 10) {
             if isCurrent {
                 Image(systemName: model.state == .playing ? "waveform" : "pause")
@@ -1243,7 +1322,7 @@ struct ContentView: View {
 
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false,
                        onAccent: Bool = false) -> some View {
-        let onAccentText: Color = theme.isDark ? Color.black.opacity(0.85) : .white
+        let onAccentText: Color = theme.onAccent
         return Text(text)
             .font(small ? .caption2 : .caption)
             .padding(.horizontal, small ? 5 : 7).padding(.vertical, small ? 1 : 3)
@@ -1344,6 +1423,41 @@ struct ThemedSlider: View {
     }
 }
 
+// MARK: - 颜色定制面板（仅 Dark 皮肤）
+
+struct ColorPanelView: View {
+    @ObservedObject var model: PlayerModel
+
+    // Dark 默认色：金色 + #121212
+    private let defaultAccent = Color(red: 0.93, green: 0.68, blue: 0.30)
+    private let defaultBg = Color(red: 0.0706, green: 0.0706, blue: 0.0706)
+
+    private var accentBinding: Binding<Color> {
+        Binding(
+            get: { model.customAccentHex.flatMap(Color.init(hex:)) ?? defaultAccent },
+            set: { model.setCustomAccent($0) })
+    }
+    private var bgBinding: Binding<Color> {
+        Binding(
+            get: { model.customBgHex.flatMap(Color.init(hex:)) ?? defaultBg },
+            set: { model.setCustomBg($0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Dark Skin Colors")
+                .font(.headline)
+            ColorPicker("Accent", selection: accentBinding, supportsOpacity: false)
+            ColorPicker("Background", selection: bgBinding, supportsOpacity: false)
+            Button("Reset to Defaults") { model.resetCustomColors() }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 250)
+    }
+}
+
 // MARK: - 主题化输出模式开关
 
 /// DoP/PCM 分段开关：选中段用主题强调色，轨道用主题底色，随皮肤变化
@@ -1375,7 +1489,7 @@ struct ModePicker: View {
             Text(label)
                 .font(.callout.weight(selected ? .semibold : .regular))
                 .foregroundStyle(selected
-                                 ? (theme.isDark ? Color.black.opacity(0.85) : Color.white)
+                                 ? theme.onAccent
                                  : Color.primary.opacity(hovering == value ? 0.9 : 0.55))
                 .frame(width: 52, height: 22)
                 .crtGlowText(theme)
