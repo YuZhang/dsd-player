@@ -1448,7 +1448,7 @@ struct ColorPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Dark Skin Colors")
+            Text("Default Skin Colors")
                 .font(.headline)
             ColorPicker("Accent", selection: accentBinding, supportsOpacity: false)
             ColorPicker("Background", selection: bgBinding, supportsOpacity: false)
