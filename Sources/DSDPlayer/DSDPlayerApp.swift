@@ -14,6 +14,7 @@ struct SavedState: Codable, Equatable {
     let showPlaylist: Bool? // 同上
     let customAccent: String?   // Dark 皮肤自定义强调色（hex），nil = 默认
     let customBg: String?       // Dark 皮肤自定义背景色（hex）
+    let customBgOpacity: Double?   // 背景透明度 0...1，nil = 不透明
 }
 
 // MARK: - 播放模式
@@ -107,6 +108,7 @@ final class PlayerModel: ObservableObject {
     // MARK: Dark 皮肤自定义颜色（仅 Dark 皮肤生效）
     @Published var customAccentHex: String?
     @Published var customBgHex: String?
+    @Published var customBgOpacity: Double?   // 背景透明度 0...1，nil = 不透明
 
     /// 应用自定义强调色（实时预览）
     func setCustomAccent(_ color: Color) {
@@ -118,10 +120,16 @@ final class PlayerModel: ObservableObject {
         customBgHex = color.hexString
         persist()
     }
-    /// 恢复 Dark 默认配色（金色 + #121212）
+    /// 恢复 Dark 默认配色（金色 + #121212 + 不透明）
     func resetCustomColors() {
         customAccentHex = nil
         customBgHex = nil
+        customBgOpacity = nil
+        persist()
+    }
+    /// 设置背景透明度（0...1，实时预览）
+    func setCustomBgOpacity(_ value: Double) {
+        customBgOpacity = value
         persist()
     }
 
@@ -137,9 +145,16 @@ final class PlayerModel: ObservableObject {
         if let hex = customBgHex, let c = Color(hex: hex) {
             // 浅色背景：切换为浅色模式（主文字变深），徽标底色反转
             let light = luminance(c) > 0.45
-            t = Theme(bgTop: c, bgBottom: c, accent: t.accent,
+            let bg = c.opacity(customBgOpacity ?? 1)
+            t = Theme(bgTop: bg, bgBottom: bg, accent: t.accent,
                       badgeBg: light ? Color.black.opacity(0.07) : Color.white.opacity(0.08),
                       isDark: !light, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
+                      crtGlow: t.crtGlow, proLook: t.proLook)
+        } else if let op = customBgOpacity, op < 1 {
+            // 仅调透明度：默认背景色加透明
+            let bg = t.bgTop.opacity(op)
+            t = Theme(bgTop: bg, bgBottom: bg, accent: t.accent, badgeBg: t.badgeBg,
+                      isDark: t.isDark, physicalButtons: t.physicalButtons, dotGrid: t.dotGrid,
                       crtGlow: t.crtGlow, proLook: t.proLook)
         }
         return t
@@ -180,7 +195,8 @@ final class PlayerModel: ObservableObject {
                                skin: skin.rawValue,
                                showPlaylist: showPlaylist,
                                customAccent: customAccentHex,
-                               customBg: customBgHex)
+                               customBg: customBgHex,
+                               customBgOpacity: customBgOpacity)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -199,6 +215,7 @@ final class PlayerModel: ObservableObject {
         engine.outputMode = outputMode
         customAccentHex = saved.customAccent
         customBgHex = saved.customBg
+        customBgOpacity = saved.customBgOpacity
         var items: [PlaylistItem] = []
         var missing = 0
         for path in saved.paths {
@@ -772,6 +789,7 @@ struct ContentView: View {
                     .background(theme.bgBottom)   // 不透明盖住冲孔
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 10))   // 窗口圆角内裁剪（透明背景时必需）
         .coordinateSpace(name: "root")
         .onPreferenceChange(HoleFreeRectKey.self) { holeFreeRects = $0 }
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
@@ -1452,6 +1470,15 @@ struct ColorPanelView: View {
                 .font(.headline)
             ColorPicker("Accent", selection: accentBinding, supportsOpacity: false)
             ColorPicker("Background", selection: bgBinding, supportsOpacity: false)
+            HStack(spacing: 8) {
+                Text("Opacity").frame(width: 76, alignment: .leading)
+                Slider(value: Binding(
+                    get: { model.customBgOpacity ?? 1 },
+                    set: { model.setCustomBgOpacity($0) }), in: 0.15...1)
+                Text("\(Int((model.customBgOpacity ?? 1) * 100))%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
             Button("Reset to Defaults") { model.resetCustomColors() }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
@@ -1622,6 +1649,8 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true       // 面板空白处即可拖动窗口
+            window.isOpaque = false                         // 允许背景透明（透明度可调）
+            window.backgroundColor = .clear
             // 标题栏装饰视图会画底部分隔线，隐藏它（红绿灯按钮在别的视图里，不受影响）
             if let root = window.contentView?.superview {
                 for sub in root.subviews {
