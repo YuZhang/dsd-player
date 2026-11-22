@@ -483,3 +483,60 @@ private extension Data {
     mutating func appendBE(_ v: UInt32) { for i in (0..<4).reversed() { append(UInt8((v >> (i * 8)) & 0xFF)) } }
     mutating func appendBE(_ v: UInt16) { for i in (0..<2).reversed() { append(UInt8((v >> (i * 8)) & 0xFF)) } }
 }
+
+// MARK: - LUT 与直接实现一致性 / 性能
+
+extension DSDPlayerTests {
+    /// LUT 转换器与逐位直接实现对同一输入的输出应基本一致（相位对齐差半组，幅度一致）
+    func testLUTMatchesDirectFIR() throws {
+        let dsd = makeTone(dsdRate: 2_822_400, seconds: 0.1, freqL: 440, freqR: 880)
+        let lut = DSDToPCM(dsdRate: 2_822_400, pcmRate: 88_200, channels: 2)
+        let fast = lut.process(dsd, channels: 2)
+        let direct = DirectFIR(taps: lutTaps(dsdRate: 2_822_400, pcmRate: 88_200), decimation: 32, channels: 2)
+        let slow = direct.process(dsd, channels: 2)
+        XCTAssertEqual(fast.count, slow.count, "frame count")
+        var maxDiff: Int32 = 0
+        for (a, b) in zip(fast, slow) {
+            maxDiff = max(maxDiff, abs(a - b))
+        }
+        // 相对满幅的差异应极小（相位差半抽取组导致的微小偏移）
+        XCTAssertLessThan(Double(maxDiff) / Double(0x1p31), 0.01, "max diff \(maxDiff)")
+    }
+
+    /// 与转换器完全相同的滤波器设计（taps 是 private，这里复制构造逻辑）
+    private func lutTaps(dsdRate: UInt32, pcmRate: Int) -> [Float] {
+        let decimation = Int(dsdRate) / pcmRate
+        let M = 8 * decimation
+        let fc = min(24_000.0, Double(pcmRate) * 0.45) / Double(dsdRate)
+        var h = [Float](repeating: 0, count: M + 1)
+        var sum: Float = 0
+        for n in 0...M {
+            let k = Float(n) - Float(M) / 2
+            let sinc = k == 0 ? Float(2 * fc) : sin(Float.pi * 2 * Float(fc) * k) / (Float.pi * k)
+            let w = Float(0.42 - 0.5 * cos(2 * Double.pi * Double(n) / Double(M))
+                          + 0.08 * cos(4 * Double.pi * Double(n) / Double(M)))
+            h[n] = sinc * w
+            sum += h[n]
+        }
+        return h.map { $0 / sum }
+    }
+
+    /// 性能基准：LUT 路径应显著快于逐位路径
+    func testLUTPerformance() throws {
+        let dsd = makeTone(dsdRate: 2_822_400, seconds: 5, freqL: 440, freqR: 880)
+        let lut = DSDToPCM(dsdRate: 2_822_400, pcmRate: 88_200, channels: 2)
+        let direct = DirectFIR(taps: lutTaps(dsdRate: 2_822_400, pcmRate: 88_200), decimation: 32, channels: 2)
+        // 预热
+        _ = lut.process(dsd, channels: 2)
+        _ = direct.process(dsd, channels: 2)
+        let t0 = Date()
+        let fast = lut.process(dsd, channels: 2)
+        let tFast = Date().timeIntervalSince(t0)
+        let t1 = Date()
+        let slow = direct.process(dsd, channels: 2)
+        let tSlow = Date().timeIntervalSince(t1)
+        XCTAssertEqual(fast.count, slow.count)
+        print(String(format: "LUT: %.3fs  direct: %.3fs  speedup: %.1fx", tFast, tSlow, tSlow / tFast))
+        XCTAssertLessThan(tFast * 3, tSlow, "LUT should be at least 3x faster")
+    }
+}

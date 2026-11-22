@@ -295,8 +295,8 @@ final class PlayerModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
-        // VU 电平表独立 30Hz 刷新，保证动画流畅
-        meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+        // VU 电平表独立 20Hz 刷新（人眼对电平动画的差异不可辨，降低 body 重算频率）
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.meterTick() }
         }
         setupRemoteCommands()
@@ -356,12 +356,12 @@ final class PlayerModel: ObservableObject {
         if state == .playing || switchingCount > 0 {
             let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
             let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
-            // 快攻慢放（模拟表针动态）
-            meterL = max(l, meterL * 0.91)
-            meterR = max(r, meterR * 0.91)
+            // 快攻慢放（模拟表针动态；系数按 20Hz 换算，与 30Hz 时的时间常数一致）
+            meterL = max(l, meterL * 0.875)
+            meterR = max(r, meterR * 0.875)
         } else {
-            meterL *= 0.94
-            meterR *= 0.92
+            meterL *= 0.912
+            meterR *= 0.883
         }
     }
 
@@ -1639,17 +1639,27 @@ struct ContentView: View {
         }
     }
 
+    /// 设备名截断结果缓存（界面高频重算时避免重复字体测量）
+    @State private var deviceNameCache: [String: String] = [:]
+
     /// 设备名截断：用 NSFont 实际测量，超过 maxWidth 时尾部加省略号
     private func truncatedDeviceName(_ name: String, maxWidth: CGFloat = 130) -> String {
+        if let cached = deviceNameCache[name] { return cached }
         let font = NSFont.systemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        if (name as NSString).size(withAttributes: attrs).width <= maxWidth { return name }
-        var s = name
-        while !s.isEmpty,
-              ((s + "…") as NSString).size(withAttributes: attrs).width > maxWidth {
-            s.removeLast()
+        let result: String
+        if (name as NSString).size(withAttributes: attrs).width <= maxWidth {
+            result = name
+        } else {
+            var s = name
+            while !s.isEmpty,
+                  ((s + "…") as NSString).size(withAttributes: attrs).width > maxWidth {
+                s.removeLast()
+            }
+            result = s + "…"
         }
-        return s + "…"
+        deviceNameCache[name] = result
+        return result
     }
 
     /// 弹出设备选择菜单：锚定在胶囊左下角
