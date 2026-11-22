@@ -21,6 +21,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **Formats**: DSF and DFF (DSDIFF) — DSD64 / DSD128 / DSD256, mono and stereo; **SACD ISO** (stereo area, both uncompressed DSD and DST-compressed frames decoded in real time)
 - **DoP bit-perfect output**: raw DSD bits packed into DoP v1.1 frames, handed to the DAC untouched — exclusive (hog) mode, forced device rate/format, no mixer, no SRC. Verified on a Topping DX5 II (DAC displays DSD64/128/256)
 - **DSD→PCM mode**: windowed-sinc low-pass + polyphase decimation (DSD64→88.2kHz, DSD128→176.4kHz, DSD256→352.8kHz). Works on any output device; system volume stays usable
+- **PCM output rate boost**: click the rate badge in the signal chain to double or quadruple the PCM rate (up to 352.8kHz for DSD64, 1.411MHz for DSD256) — a wider anti-alias transition band means gentler filtering; switchable mid-playback without losing position
 - **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck; multi-select with ⌘/⇧, batch delete via Delete key or context menu, ↑/↓ keyboard navigation
 - **Themed controls**: mode switch, device capsule, progress slider and selection highlight all follow the skin accent color, with hover/press feedback
 - **Device resilience**: USB DAC is auto-preferred with DoP at launch; device hot-unplug/replug and macOS sleep/wake re-enumeration are handled by persistent-UID re-matching — no more stale device IDs
@@ -29,7 +30,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **Click-free transitions**: DSD-silence padding (phase-continuous DoP markers) or PCM fade-in at play/seek/track boundaries
 - **VU meters**: stereo segmented level meters around a center lamp, computed in the render callback (DSD bit-density RMS / PCM RMS), logarithmic scale, red peak zone
 - **Play modes**: sequential, loop-all, repeat-one, shuffle; previous/next with smart restart
-- **Skins**: Dark, Braun Retro, Terminal Green — pick from the t-shirt menu; choice persists
+- **Skins**: Dark, Braun Retro, Terminal Green — pick from the t-shirt menu; choice persists. The Default (Dark) skin's accent and background colors are customizable, with an adjustable background transparency (15%–100%)
 - **System integration**: media keys, Lock Screen / Control Center now-playing, keyboard shortcuts
   - `Space` play/pause · `←`/`→` seek ±5s · `⌘←`/`⌘→` previous/next track
 
@@ -43,7 +44,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 4. **Play**: double-click a track. The list button toggles the playlist; the window shrinks to a compact deck when hidden
 5. If something needs attention (unsupported DoP carrier rate, device disconnected, unreadable files), a warning alert pops up — dismiss with OK
 
-The playlist, current track, play mode, output mode, skin, and playlist visibility are all restored on next launch.
+The playlist, current track, play mode, output mode (and PCM rate), skin, custom colors, and playlist visibility are all restored on next launch.
 
 ## Requirements
 
@@ -61,7 +62,7 @@ The app is ad-hoc signed. On first launch, if Gatekeeper blocks it: right-click 
 
 ```bash
 swift build          # debug build
-swift test           # run the unit tests (16 tests)
+swift test           # run the unit tests (25 tests)
 ./build_app.sh       # release build + packaged .build/DSDPlayer.app
 ```
 
