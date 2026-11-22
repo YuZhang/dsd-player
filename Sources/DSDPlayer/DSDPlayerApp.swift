@@ -105,27 +105,34 @@ final class PlayerModel: ObservableObject {
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
     private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
-    private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径）
+    nonisolated(unsafe) private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径，手动加锁）
+    private let isoCacheLock = NSLock()
+    /// 引擎操作串行队列：打开文件/建 AudioUnit/预缓冲等耗时操作在此执行，避免卡主线程
+    private let engineQueue = DispatchQueue(label: "local.dsdplayer.engine")
+    /// 正在执行的加载任务计数（主线程维护）；playGeneration 防止快速连点时旧任务覆盖新状态
+    private var switchingCount = 0
+    private var playGeneration = 0
 
-    /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource
-    func openSource(for item: PlaylistItem) -> DSDSource? {
+    /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource。
+    /// nonisolated：可能被引擎队列调用，内部已用锁保护缓存
+    nonisolated func openSource(for item: PlaylistItem) throws -> DSDSource {
         if let trackIdx = item.isoTrackIndex {
-            do {
-                let path = item.url.path
-                let iso: SacdISO
-                if let cached = isoCache[path] {
-                    iso = cached
-                } else {
-                    iso = try SacdISO(url: item.url)
-                    isoCache[path] = iso
-                }
-                return try iso.makeTrackSource(iso.album.tracks[trackIdx])
-            } catch {
-                statusMessage = error.localizedDescription
-                return nil
+            let path = item.url.path
+            isoCacheLock.lock()
+            let cached = isoCache[path]
+            isoCacheLock.unlock()
+            let iso: SacdISO
+            if let cached {
+                iso = cached
+            } else {
+                iso = try SacdISO(url: item.url)
+                isoCacheLock.lock()
+                isoCache[path] = iso
+                isoCacheLock.unlock()
             }
+            return try iso.makeTrackSource(iso.album.tracks[trackIdx])
         }
-        return try? DSDFile.open(item.url)
+        return try DSDFile.open(item.url)
     }
 
     // MARK: 持久化
@@ -191,7 +198,7 @@ final class PlayerModel: ObservableObject {
             statusMessage = "\(missing) file(s) moved or deleted, not restored"
         }
         if let idx = saved.currentIndex, playlist.indices.contains(idx) {
-            load(at: idx)
+            select(at: idx)
         }
     }
 
@@ -253,7 +260,7 @@ final class PlayerModel: ObservableObject {
         // 正在播放/暂停的设备被拔出：停止并提示
         if let puid = playingDeviceUID, state == .playing || state == .paused,
            !devices.contains(where: { $0.uid == puid }) {
-            engine.stop()
+            engineQueue.async { self.engine.stop() }
             state = .stopped
             playingDeviceUID = nil
             statusMessage = "Output device disconnected"
@@ -307,7 +314,7 @@ final class PlayerModel: ObservableObject {
         }
         queuedNextIndex = nextIdx
         if let ni = nextIdx {
-            engine.setNext(openSource(for: playlist[ni]))
+            engine.setNext(try? openSource(for: playlist[ni]))
         } else {
             engine.setNext(nil)
         }
@@ -368,7 +375,9 @@ final class PlayerModel: ObservableObject {
     var warningText: String? {
         if !statusMessage.isEmpty { return statusMessage }
         if !deviceSupportsCarrier {
-            return "This device may not support the required DoP carrier rate"
+            return outputMode == .dop
+                ? "This device may not support the required DoP carrier rate"
+                : "This device may not support the selected PCM output rate"
         }
         return nil
     }
@@ -385,29 +394,54 @@ final class PlayerModel: ObservableObject {
     /// 切换 PCM 输出采样率：播放中保持位置续播
     func setPcmRateBoost(_ boost: Int) {
         pcmRateBoost = max(0, min(2, boost))
-        engine.pcmRateBoost = pcmRateBoost
-        if state == .playing || state == .paused, let idx = currentIndex {
-            let wasPaused = state == .paused
-            let pos = engine.positionSeconds
-            play(at: idx)
-            guard statusMessage.isEmpty else { return }
-            seek(to: pos)
-            if wasPaused { engine.pause() }
-        }
+        rebuildOutputChain()
     }
 
     func setOutputMode(_ mode: OutputMode) {
         outputMode = mode
-        engine.outputMode = mode
         persist()
-        // 播放/暂停中切换：保持当前位置续播（而不是从头重播）
-        if state == .playing || state == .paused, let idx = currentIndex {
-            let wasPaused = state == .paused
-            let pos = engine.positionSeconds
-            play(at: idx)
-            guard statusMessage.isEmpty else { return }   // 启动失败则不 seek
-            seek(to: pos)
-            if wasPaused { engine.pause() }
+        rebuildOutputChain()
+    }
+
+    /// 播放/暂停中重建输出链（切换 DoP/PCM 或 PCM 采样率）：引擎队列中保持位置续播
+    private func rebuildOutputChain() {
+        guard state == .playing || state == .paused, let idx = currentIndex,
+              playlist.indices.contains(idx), let dev = selectedDevice else { return }
+        let wasPaused = state == .paused
+        let pos = engine.positionSeconds
+        playGeneration &+= 1
+        let gen = playGeneration
+        switchingCount += 1
+        let item = playlist[idx]
+        let devID = dev.id, devUID = dev.uid
+        let mode = outputMode, boost = pcmRateBoost
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            self.engine.outputMode = mode
+            self.engine.pcmRateBoost = boost
+            var error: Error?
+            do {
+                let src = try self.openSource(for: item)
+                try self.engine.load(source: src)
+                try self.engine.play(device: devID)
+                self.engine.seek(toSeconds: pos)
+                if wasPaused { self.engine.pause() }
+            } catch let e {
+                error = e
+            }
+            DispatchQueue.main.async {
+                self.switchingCount -= 1
+                guard self.playGeneration == gen else { return }
+                if let error {
+                    self.statusMessage = error.localizedDescription
+                    return
+                }
+                self.position = pos
+                self.statusMessage = ""
+                self.playingDeviceUID = devUID
+                self.queueNextForGapless()
+                self.updateNowPlaying()
+            }
         }
     }
 
@@ -481,7 +515,7 @@ final class PlayerModel: ObservableObject {
         // 首个文件加入后自动加载（不自动播放）
         if currentIndex == nil, let first = added.first,
            let idx = playlist.firstIndex(of: first) {
-            load(at: idx)
+            select(at: idx)
         }
         persist()
     }
@@ -490,7 +524,7 @@ final class PlayerModel: ObservableObject {
         let removingCurrent = currentIndex.map { offsets.contains($0) } ?? false
         playlist.remove(atOffsets: offsets)
         if removingCurrent {
-            engine.stop()
+            engineQueue.async { self.engine.stop() }
             state = .stopped
             currentIndex = nil
             position = 0
@@ -504,41 +538,57 @@ final class PlayerModel: ObservableObject {
 
     // MARK: 播放控制
 
-    private func load(at index: Int) {
+    /// 仅更新 UI 选中状态（不触碰引擎）
+    private func select(at index: Int) {
         guard playlist.indices.contains(index) else { return }
         currentIndex = index
         persist()
-        guard let src = openSource(for: playlist[index]) else { return }
-        do {
-            try engine.load(source: src)
-            position = 0
-            statusMessage = ""
-        } catch {
-            statusMessage = error.localizedDescription
-        }
     }
 
+    /// 打开/加载/开播放到引擎队列异步执行：主线程立即更新选中项，
+    /// 声音就绪前界面已响应；generation 防止快速连点时旧任务覆盖新状态
     func play(at index: Int) {
         guard let dev = selectedDevice else {
             statusMessage = "Select an output device"
             return
         }
-        load(at: index)
-        guard currentInfo != nil, statusMessage.isEmpty else { return }
-        do {
-            try engine.play(device: dev.id)
-            playingDeviceUID = dev.uid
-            queueNextForGapless()
-            updateNowPlaying()
-        } catch {
-            statusMessage = error.localizedDescription
+        guard playlist.indices.contains(index) else { return }
+        select(at: index)
+        playGeneration &+= 1
+        let gen = playGeneration
+        switchingCount += 1
+        let item = playlist[index]
+        let devID = dev.id, devUID = dev.uid
+        engineQueue.async { [weak self] in
+            guard let self else { return }
+            var error: Error?
+            do {
+                let src = try self.openSource(for: item)
+                try self.engine.load(source: src)
+                try self.engine.play(device: devID)
+            } catch let e {
+                error = e
+            }
+            DispatchQueue.main.async {
+                self.switchingCount -= 1
+                guard self.playGeneration == gen else { return }
+                if let error {
+                    self.statusMessage = error.localizedDescription
+                    return
+                }
+                self.position = 0
+                self.statusMessage = ""
+                self.playingDeviceUID = devUID
+                self.queueNextForGapless()
+                self.updateNowPlaying()
+            }
         }
     }
 
     /// 优先无缝切换（同规格曲目保持音频链路不断），否则完整重开
     private func playOrSwitch(to index: Int) {
         guard playlist.indices.contains(index) else { return }
-        if let src = openSource(for: playlist[index]), engine.switchTrack(src) {
+        if let src = try? openSource(for: playlist[index]), engine.switchTrack(src) {
             currentIndex = index
             position = 0
             persist()
@@ -552,15 +602,17 @@ final class PlayerModel: ObservableObject {
     func togglePlay() {
         switch state {
         case .stopped, .finished:
-            if currentIndex == nil, !playlist.isEmpty { load(at: 0) }
-            guard let idx = currentIndex else { return }
+            if switchingCount > 0 { return }   // 加载中，忽略重复指令
+            guard let idx = currentIndex ?? (playlist.isEmpty ? nil : 0) else { return }
             play(at: idx)
         case .playing:
-            engine.pause()
+            engineQueue.async { self.engine.pause() }
         case .paused:
             guard let dev = selectedDevice else { return }
-            do { try engine.play(device: dev.id) }
-            catch { statusMessage = error.localizedDescription }
+            engineQueue.async {
+                do { try self.engine.play(device: dev.id) }
+                catch { DispatchQueue.main.async { self.statusMessage = error.localizedDescription } }
+            }
         case .idle:
             if !playlist.isEmpty { play(at: 0) }
         }
@@ -610,7 +662,7 @@ final class PlayerModel: ObservableObject {
     }
 
     func seek(to seconds: Double) {
-        engine.seek(toSeconds: seconds)
+        engineQueue.async { self.engine.seek(toSeconds: seconds) }
         position = seconds
     }
 
