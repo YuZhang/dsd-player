@@ -283,7 +283,6 @@ final class PlayerModel: ObservableObject {
         }
         engine.onError = { [weak self] msg in self?.statusMessage = msg }
         engine.onTrackAdvanced = { [weak self] in
-            tlog("MAIN onTrackAdvanced (boundary committed)")
             guard let self, let ni = self.queuedNextIndex,
                   self.playlist.indices.contains(ni) else { return }
             self.currentIndex = ni
@@ -631,7 +630,6 @@ final class PlayerModel: ObservableObject {
         }
         guard playlist.indices.contains(index) else { return }
         select(at: index)
-        tlog("MAIN play(at:) selected idx=\(index)")
         playGeneration &+= 1
         let gen = playGeneration
         switchingCount += 1
@@ -649,7 +647,6 @@ final class PlayerModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.switchingCount -= 1
-                tlog("MAIN play completion err=\(error.map { String(describing: $0) } ?? "nil")")
                 guard self.playGeneration == gen else { return }
                 if let error {
                     self.statusMessage = error.localizedDescription
@@ -667,9 +664,7 @@ final class PlayerModel: ObservableObject {
     /// 优先无缝切换（同规格曲目保持音频链路不断），否则完整重开
     private func playOrSwitch(to index: Int) {
         guard playlist.indices.contains(index) else { return }
-        tlog("MAIN playOrSwitch idx=\(index)")
         if let src = try? openSource(for: playlist[index]), engine.switchTrack(src) {
-            tlog("MAIN playOrSwitch gapless ok")
             currentIndex = index
             position = 0
             persist()
@@ -681,7 +676,6 @@ final class PlayerModel: ObservableObject {
     }
 
     func togglePlay() {
-        tlog("MAIN togglePlay state=\(state)")
         switch state {
         case .stopped, .finished:
             if switchingCount > 0 { return }   // 加载中，忽略重复指令
