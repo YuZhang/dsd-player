@@ -22,7 +22,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **DoP bit-perfect output**: raw DSD bits packed into DoP v1.1 frames, handed to the DAC untouched — exclusive (hog) mode, forced device rate/format, no mixer, no SRC. Verified on a Topping DX5 II (DAC displays DSD64/128/256)
 - **DSD→PCM mode**: windowed-sinc low-pass + polyphase decimation (DSD64→88.2kHz, DSD128→176.4kHz, DSD256→352.8kHz). Works on any output device; system volume stays usable
 - **PCM output rate boost**: click the rate badge in the signal chain to double or quadruple the PCM rate (up to 352.8kHz for DSD64, 1.411MHz for DSD256) — a wider anti-alias transition band means gentler filtering; switchable mid-playback without losing position
-- **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck; multi-select with ⌘/⇧, batch delete via Delete key or context menu, ↑/↓ keyboard navigation
+- **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck; multi-select with ⌘/⇧, batch delete via Delete key or context menu, ↑/↓ keyboard navigation, **drag-to-reorder** (multi-select drag moves the whole group)
 - **Themed controls**: mode switch, device capsule, progress slider and selection highlight all follow the skin accent color, with hover/press feedback
 - **Device resilience**: USB DAC is auto-preferred with DoP at launch; device hot-unplug/replug and macOS sleep/wake re-enumeration are handled by persistent-UID re-matching — no more stale device IDs
 - **Volume hygiene**: DoP forces the device volume to 1.0 (bit-perfect requirement) and restores your previous volume on pause/stop/quit
@@ -31,6 +31,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **VU meters**: stereo segmented level meters around a center lamp, computed in the render callback (DSD bit-density RMS / PCM RMS), logarithmic scale, red peak zone
 - **Play modes**: sequential, loop-all, repeat-one, shuffle; previous/next with smart restart
 - **Skins**: Dark, Braun Retro, Terminal Green — pick from the t-shirt menu; choice persists. The Default (Dark) skin's accent and background colors are customizable, with an adjustable background transparency (15%–100%)
+- **Album art**: embedded covers are read from DSF/DFF ID3v2 tags; if absent, common cover images in the song's folder (cover/front/folder/album/artwork) are used; click the artwork for a full-size preview
 - **System integration**: media keys, Lock Screen / Control Center now-playing, keyboard shortcuts
   - `Space` play/pause · `←`/`→` seek ±5s · `⌘←`/`⌘→` previous/next track
 
@@ -62,7 +63,7 @@ The app is ad-hoc signed. On first launch, if Gatekeeper blocks it: right-click 
 
 ```bash
 swift build          # debug build
-swift test           # run the unit tests (25 tests)
+swift test           # run the unit tests (30 tests)
 ./build_app.sh       # release build + packaged .build/DSDPlayer.app
 ```
 
