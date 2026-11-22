@@ -937,6 +937,7 @@ struct ContentView: View {
     @State private var draggingID: PlaylistItem.ID?   // 正在拖拽的条目
     @State private var dropIndex: Int?   // 插入位置（0...count，nil = 无）
     @State private var showCoverPreview = false   // 封面大图预览
+    @State private var deviceAnchor: CGRect = .zero   // 设备按钮在 root 坐标系中的位置（菜单锚点）
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
     @State private var deviceHover = false
@@ -1163,49 +1164,31 @@ struct ContentView: View {
                 .holeFreeZone()
                 Spacer()
                 // 胶囊底：与输出模式开关同一规格（28pt 高、主题徽标底色填充）
-                // 注意：borderlessButton 的 Menu 会吞掉 label 上的自定义背景，所以胶囊画在外层
+                // 设备选择：普通按钮 + 手动弹 NSMenu。
+                // SwiftUI 的 borderlessButton Menu 会忽略 label 布局并把内容居中，
+                // 设备名长短会导致文字/菜单锚点漂移；普通按钮的 label 布局完全可控。
                 HStack(spacing: 0) {
-                    Menu {
-                        ForEach(model.devices) { dev in
-                            Button {
-                                model.selectedDevice = dev
-                            } label: {
-                                let name = dev.name + (dev.isUSB ? " ⚡" : "")
-                                if dev == model.selectedDevice {
-                                    Label(name, systemImage: "checkmark")
-                                } else {
-                                    Text(name)
-                                }
-                            }
+                    Button(action: showDeviceMenu) {
+                        HStack(spacing: 4) {
+                            // 字符串级截断：手动测量，超长加省略号
+                            Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
+                                .font(.callout)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
+                            Spacer(minLength: 0)   // 内容靠左，右侧留白
                         }
-                        Divider()
-                        Button("Refresh Devices") { model.refreshDevices() }
-                    } label: {
-                        // borderlessButton 忽略 label 的 frame 并取内容理想尺寸，
-                        // 用固定尺寸 Color.clear 撑起按钮宽度，HStack 才能获得满宽提议、
-                        // 让 Spacer 展开把内容顶到左边
-                        ZStack {
-                            Color.clear
-                                .frame(width: 156, height: 20)
-                            HStack(spacing: 4) {
-                                // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
-                                Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
-                                    .font(.callout)
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.caption2)
-                                    .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
-                                Spacer(minLength: 0)   // 内容靠左，右侧留白
-                            }
-                            .padding(.horizontal, 4)
-                        }
+                        .padding(.horizontal, 4)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(
+                                key: DeviceAnchorKey.self,
+                                value: geo.frame(in: .named("root")))
+                        })
                         .contentShape(Rectangle())
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    // 关键：borderlessButton 按内容收缩，必须让按钮填满胶囊，
-                    // 否则文字/菜单锚点随设备名长度漂移
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.plain)
                     .onHover { deviceHover = $0 }
+                    .onPreferenceChange(DeviceAnchorKey.self) { deviceAnchor = $0 }
                 }
                 .frame(width: 164, height: 28)   // 固定宽度：设备名变化不跳动
                 .background(
@@ -1669,6 +1652,29 @@ struct ContentView: View {
         return s + "…"
     }
 
+    /// 弹出设备选择菜单：锚定在胶囊左下角
+    private func showDeviceMenu() {
+        let menu = NSMenu()
+        for dev in model.devices {
+            let item = ClosureMenuItem(title: dev.name + (dev.isUSB ? " ⚡" : "")) {
+                model.selectedDevice = dev
+            }
+            if dev == model.selectedDevice { item.state = .on }
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Refresh Devices") { model.refreshDevices() })
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first else { return }
+        // root 坐标为窗口左上角原点的 SwiftUI 坐标；窗口 frame 为屏幕左下原点，直接换算
+        let winFrame = window.frame
+        let point = NSPoint(x: winFrame.minX + deviceAnchor.minX,
+                            y: winFrame.minY + winFrame.height - deviceAnchor.maxY)
+        // 异步弹出：当前鼠标抬起事件正被处理，同步 popUp 会把它当成"点击空白处"立即关闭菜单
+        DispatchQueue.main.async {
+            menu.popUp(positioning: nil, at: point, in: nil)
+        }
+    }
+
     private func badge(_ text: String, highlight: Bool = false, small: Bool = false,
                        onAccent: Bool = false) -> some View {
         let onAccentText: Color = theme.onAccent
@@ -1995,6 +2001,27 @@ private struct WindowConfigurator: NSViewRepresentable {
     func updateNSView(_ nsView: View, context: Context) {
         nsView.applySettings()   // 每次 SwiftUI 更新都重新应用，防止被重置
     }
+}
+
+// MARK: - 设备菜单锚点
+
+private struct DeviceAnchorKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
+/// 携带闭包的 NSMenuItem（item 自持有 target，菜单弹出期间存活）
+private final class ClosureMenuItem: NSMenuItem {
+    private let block: () -> Void
+    init(title: String, block: @escaping () -> Void) {
+        self.block = block
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        self.target = self
+    }
+    required init(coder: NSCoder) { fatalError() }
+    @objc private func run() { block() }
 }
 
 // MARK: - 封面大图预览
