@@ -22,6 +22,13 @@ final class PlaybackEngine: @unchecked Sendable {
 
     private(set) var source: DSDSource?
     var outputMode: OutputMode = .dop
+    /// PCM 输出采样率提升档：0 = DSD率/32（88.2k@DSD64），1 = ×2，2 = ×4
+    var pcmRateBoost = 0
+
+    /// PCM 输出采样率 = DSD率/32 × 2^boost
+    private func pcmRate(for info: DSDInfo) -> Int {
+        Int(info.dsdSampleRate) / 32 << max(0, min(2, pcmRateBoost))
+    }
     private(set) var state: State = .idle {
         didSet {
             let cb = onStateChange, s = state
@@ -67,7 +74,7 @@ final class PlaybackEngine: @unchecked Sendable {
 
     /// 当前输出采样率（DoP 载波或 PCM 率）
     private func outputRate(for src: DSDSource) -> Int {
-        outputMode == .dop ? Int(src.info.dsdSampleRate) / 16 : Int(src.info.dsdSampleRate) / 32
+        outputMode == .dop ? Int(src.info.dsdSampleRate) / 16 : pcmRate(for: src.info)
     }
 
     // MARK: 加载
@@ -86,7 +93,7 @@ final class PlaybackEngine: @unchecked Sendable {
         modeIsPCM.store(outputMode == .pcm, ordering: .relaxed)
         pcmConverter = outputMode == .pcm
             ? DSDToPCM(dsdRate: src.info.dsdSampleRate,
-                       pcmRate: Int(src.info.dsdSampleRate) / 32,
+                       pcmRate: pcmRate(for: src.info),
                        channels: src.info.channelCount)
             : nil
         channels.store(src.info.channelCount, ordering: .relaxed)
@@ -186,7 +193,7 @@ final class PlaybackEngine: @unchecked Sendable {
         encoder.reset()
         pcmConverter = outputMode == .pcm
             ? DSDToPCM(dsdRate: src.info.dsdSampleRate,
-                       pcmRate: Int(src.info.dsdSampleRate) / 32,
+                       pcmRate: pcmRate(for: src.info),
                        channels: src.info.channelCount)
             : nil
         feederOffset.store(byteOffset, ordering: .relaxed)

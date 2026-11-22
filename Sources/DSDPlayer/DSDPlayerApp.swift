@@ -12,6 +12,7 @@ struct SavedState: Codable, Equatable {
     let outputMode: Int
     let skin: Int?          // 旧版本数据无此字段，解码为 nil 时用默认
     let showPlaylist: Bool? // 同上
+    let pcmRateBoost: Int?  // PCM 输出采样率提升档（0=/32, 1=×2, 2=×4）
 }
 
 // MARK: - 播放模式
@@ -83,6 +84,10 @@ final class PlayerModel: ObservableObject {
         }
     }
     @Published var outputMode: OutputMode = .dop
+    /// PCM 输出采样率提升档：0 = DSD率/32，1 = ×2，2 = ×4
+    @Published var pcmRateBoost = 0 {
+        didSet { persist() }
+    }
     @Published var skin: Skin = .dark {
         didSet { persist() }
     }
@@ -135,7 +140,8 @@ final class PlayerModel: ObservableObject {
                                playMode: playMode.rawValue,
                                outputMode: outputMode.rawValue,
                                skin: skin.rawValue,
-                               showPlaylist: showPlaylist)
+                               showPlaylist: showPlaylist,
+                               pcmRateBoost: pcmRateBoost)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -152,6 +158,8 @@ final class PlayerModel: ObservableObject {
         showPlaylist = saved.showPlaylist ?? true
         outputMode = OutputMode(rawValue: saved.outputMode) ?? .dop
         engine.outputMode = outputMode
+        pcmRateBoost = saved.pcmRateBoost ?? 0
+        engine.pcmRateBoost = pcmRateBoost
         var items: [PlaylistItem] = []
         var missing = 0
         for path in saved.paths {
@@ -195,6 +203,7 @@ final class PlayerModel: ObservableObject {
 
     init() {
         refreshDevices()
+        engine.pcmRateBoost = pcmRateBoost
         engine.onStateChange = { [weak self] s in
             guard let self else { return }
             // playAt 内部 load/stop 会派生 .stopped 事件，非播完路径无需处理
@@ -365,7 +374,26 @@ final class PlayerModel: ObservableObject {
     }
 
     func activeOutputRate(for info: DSDInfo) -> Double {
-        outputMode == .dop ? info.dopCarrierRate : Double(info.dsdSampleRate) / 32
+        outputMode == .dop ? info.dopCarrierRate : pcmOutputRate(for: info)
+    }
+
+    /// PCM 输出采样率（44.1k 家族的整数倍）
+    func pcmOutputRate(for info: DSDInfo) -> Double {
+        Double(info.dsdSampleRate) / 32 * Double(1 << max(0, min(2, pcmRateBoost)))
+    }
+
+    /// 切换 PCM 输出采样率：播放中保持位置续播
+    func setPcmRateBoost(_ boost: Int) {
+        pcmRateBoost = max(0, min(2, boost))
+        engine.pcmRateBoost = pcmRateBoost
+        if state == .playing || state == .paused, let idx = currentIndex {
+            let wasPaused = state == .paused
+            let pos = engine.positionSeconds
+            play(at: idx)
+            guard statusMessage.isEmpty else { return }
+            seek(to: pos)
+            if wasPaused { engine.pause() }
+        }
     }
 
     func setOutputMode(_ mode: OutputMode) {
@@ -946,10 +974,34 @@ struct ContentView: View {
                     Image(systemName: "arrow.right")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.tertiary)
-                    Text(model.outputMode == .dop
-                         ? "DoP \(Int(info.dopCarrierRate / 1000))kHz"
-                         : "PCM \(Int(info.dsdSampleRate) / 32 / 1000)kHz")
-                        .foregroundStyle(theme.accent)
+                    if model.outputMode == .dop {
+                        Text("DoP \(Int(info.dopCarrierRate / 1000))kHz")
+                            .foregroundStyle(theme.accent)
+                    } else {
+                        // PCM 输出采样率：点击切换（DSD率/32 的 1/2/4 倍）
+                        let base = Int(info.dsdSampleRate) / 32
+                        Menu {
+                            ForEach(0..<3, id: \.self) { b in
+                                let rate = base * (1 << b)
+                                Button {
+                                    model.setPcmRateBoost(b)
+                                } label: {
+                                    if model.pcmRateBoost == b {
+                                        Label("\(rate / 1000)kHz", systemImage: "checkmark")
+                                    } else {
+                                        Text("\(rate / 1000)kHz")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Text("PCM \(base * (1 << model.pcmRateBoost) / 1000)kHz")
+                                .foregroundStyle(theme.accent)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("PCM output sample rate (click to change)")
+                    }
                     // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
                     HStack(spacing: 3) {
                         Circle().fill(theme.accent).frame(width: 4, height: 4)

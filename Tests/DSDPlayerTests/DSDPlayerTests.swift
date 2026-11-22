@@ -251,9 +251,49 @@ final class DSDPlayerTests: XCTestCase {
         XCTAssertEqual(Skin(rawValue: s.skin ?? 0) ?? .dark, .dark)
     }
 
+    /// 一阶 Sigma-Delta 调制的立体声测试音（字节交错 LRLR）
+    private func makeTone(dsdRate: UInt32, seconds: Double, freqL: Double, freqR: Double) -> [UInt8] {
+        let total = Int(Double(dsdRate) * seconds)
+        let bytesPerChannel = total / 8
+        var bits = [UInt8](repeating: 0, count: bytesPerChannel * 2)
+        var intL = 0.0, intR = 0.0
+        for i in 0..<bytesPerChannel {
+            var byteL: UInt8 = 0, byteR: UInt8 = 0
+            for b in 0..<8 {
+                let t = Double(i * 8 + b) / Double(dsdRate)
+                let sl = 0.6 * sin(2 * .pi * freqL * t)
+                let sr = 0.6 * sin(2 * .pi * freqR * t)
+                intL += sl; intR += sr
+                let qL = intL >= 0 ? 1.0 : -1.0
+                let qR = intR >= 0 ? 1.0 : -1.0
+                intL -= qL; intR -= qR
+                if qL > 0 { byteL |= UInt8(1 << (7 - b)) }
+                if qR > 0 { byteR |= UInt8(1 << (7 - b)) }
+            }
+            bits[i * 2] = byteL
+            bits[i * 2 + 1] = byteR
+        }
+        return bits
+    }
+
+    func testHighRatePCMConversion() throws {
+        // DSD64 → 176.4k / 352.8k：输出长度合理、信号电平正常无削波
+        let dsd = makeTone(dsdRate: 2_822_400, seconds: 0.2, freqL: 440, freqR: 880)
+        for (boost, rate) in [(1, 176_400), (2, 352_800)] {
+            let conv = DSDToPCM(dsdRate: 2_822_400, pcmRate: rate, channels: 2)
+            let out = conv.process(dsd, channels: 2)
+            // 期望帧数 = rate × 0.2s，容许滤波器群延迟误差
+            XCTAssertEqual(out.count / 2, Int(Double(rate) * 0.2), accuracy: 4000, "output frames")
+            let lMax = out.enumerated().filter { $0.offset % 2 == 0 }.map { abs($0.element) }.max() ?? 0
+            XCTAssertGreaterThan(Double(lMax) / Double(0x1p31), 0.3, "signal level")
+            XCTAssertLessThan(Double(lMax) / Double(0x1p31), 0.95, "no clipping")
+        }
+    }
+
     func testSavedStateRoundTrip() throws {
         let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
-                                  playMode: 3, outputMode: 1, skin: 1, showPlaylist: false)
+                                  playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
+                                  pcmRateBoost: 1)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(SavedState.self, from: data)
         XCTAssertEqual(decoded, original)
