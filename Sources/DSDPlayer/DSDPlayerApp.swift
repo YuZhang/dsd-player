@@ -861,6 +861,13 @@ struct ContentView: View {
 
     private var theme: Theme { model.effectiveTheme }
 
+    /// 半透明模式：Default 皮肤且背景透明度 < 1。
+    /// 此时整窗只由根部背景绘制一次，面板/列表不再铺第二层同色底，
+    /// 避免重叠的半透明填充叠加混合（标题栏与面板颜色不一致）
+    private var isTranslucent: Bool {
+        model.skin == .dark && (model.customBgOpacity ?? 1) < 0.999
+    }
+
     /// 时间字体：Terminal 用液晶数字（DB LCD Temp）并放大
     private var timeFont: Font {
         theme.crtGlow ? .custom("DB LCD Temp", size: 18) : .caption.monospacedDigit()
@@ -874,11 +881,16 @@ struct ContentView: View {
                 nowPlaying
                 transport
             }
-            .background(faceplateBackground)
+            .background(Group {
+                if isTranslucent { Color.clear } else { faceplateBackground }
+            })
             if model.showPlaylist {
                 Divider().overlay(theme.crtGlow ? theme.accent.opacity(0.18) : (theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.12)))
                 playlistView
-                    .background(theme.bgBottom)   // 不透明盖住冲孔
+                    // 不透明盖住冲孔；半透明时不再铺第二层（避免叠加混合）
+                    .background(Group {
+                        if isTranslucent { Color.clear } else { theme.bgBottom }
+                    })
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))   // 窗口圆角内裁剪（透明背景时必需）
@@ -887,7 +899,8 @@ struct ContentView: View {
         // 列表展开时填满窗口（多余高度由列表区域吸收）；收起时内容自适应使窗口收缩
         .frame(maxHeight: model.showPlaylist ? .infinity : nil, alignment: .top)
         // 背景负责延伸进标题栏（仅背景忽略顶部安全区，正文保持正常布局）；
-        // 背景不参与内容尺寸计算，窗口保持固定不可拖大
+        // 背景不参与内容尺寸计算，窗口保持固定不可拖大。
+        // 半透明模式整窗只有这一层填充；圆角裁剪让四角露出桌面
         .background {
             Group {
                 if theme.dotGrid {
@@ -896,6 +909,7 @@ struct ContentView: View {
                     theme.bgTop   // 与面板同一个颜色来源
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .ignoresSafeArea(.container, edges: .top)
         }
         // 隐藏按钮承载快捷键：方向键快进退、Delete 删除选中、上下键移动选择
