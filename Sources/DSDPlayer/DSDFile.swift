@@ -277,3 +277,117 @@ final class DFFFile: DSDSource {
         return bytes
     }
 }
+
+// MARK: - 内嵌封面提取（DSF/DFF 均使用 ID3v2 APIC 帧存储封面图片）
+
+enum CoverArt {
+    /// 提取封面图片数据；无封面返回 nil
+    static func extract(from url: URL) -> Data? {
+        guard let ext = url.pathExtension.lowercased() as String?,
+              let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        if ext == "dsf" {
+            return extractFromDSF(fh: fh, url: url)
+        } else if ext == "dff" {
+            return extractFromDFF(fh: fh, url: url)
+        }
+        return nil
+    }
+
+    /// DSF：ID3v2 标签在文件尾部，从尾部窗口内找 "ID3" 头
+    private static func extractFromDSF(fh: FileHandle, url: URL) -> Data? {
+        let fileSize = (try? fh.seekToEnd()) ?? 0
+        guard fileSize > 10 else { return nil }
+        let window = min(fileSize, 8 * 1024 * 1024)
+        try? fh.seek(toOffset: fileSize - window)
+        guard let tail = try? fh.read(upToCount: Int(window)) else { return nil }
+        // 从后往前找 ID3v2 头（3/4 版），并校验声明长度与实际到文件尾的距离吻合
+        var i = tail.count - 10
+        while i >= 0 {
+            if tail[i] == 0x49, tail[i + 1] == 0x44, tail[i + 2] == 0x33,   // "ID3"
+               tail[i + 3] == 3 || tail[i + 3] == 4,
+               tail[i + 6] & 0x80 == 0, tail[i + 7] & 0x80 == 0,
+               tail[i + 8] & 0x80 == 0, tail[i + 9] & 0x80 == 0 {
+                let declared = Int(tail[i + 6]) << 21 | Int(tail[i + 7]) << 14
+                             | Int(tail[i + 8]) << 7 | Int(tail[i + 9])
+                // 标签总长 = 10 字节头 + 声明负载；容忍尾部少量填充
+                if declared + 10 >= tail.count - i - 64 && declared + 10 <= tail.count - i {
+                    return parseID3APIC(Data(tail[i...]))
+                }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// DFF：遍历顶层 chunk 找 "ID3 " chunk（size 含 12 字节头，大端）
+    private static func extractFromDFF(fh: FileHandle, url: URL) -> Data? {
+        let fileSize = (try? fh.seekToEnd()) ?? 0
+        guard fileSize > 16 + 12 else { return nil }
+        var offset: UInt64 = 16   // 跳过 FRM8 头
+        while offset + 12 <= fileSize {
+            guard let hdr = try? fh.readAt(offset, count: 12), hdr.count == 12 else { return nil }
+            let id = String(decoding: hdr[0..<4], as: UTF8.self)
+            let size = Data(hdr).u64be(4)
+            guard offset + 12 + size <= fileSize else { return nil }
+            if id == "ID3 " {
+                guard size > 10,
+                      let body = try? fh.readAt(offset + 12, count: Int(size)),
+                      body.count == size else { return nil }
+                return parseID3APIC(Data(body))
+            }
+            offset += 12 + size + (size & 1)
+        }
+        return nil
+    }
+
+    /// 解析 ID3v2.3/v2.4 帧，取第一个 APIC 图片数据
+    static func parseID3APIC(_ data: Data) -> Data? {
+        let b = [UInt8](data)
+        guard b.count > 10, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 else { return nil }
+        let major = b[3]
+        guard major == 3 || major == 4 else { return nil }
+        var pos = 10
+        while pos + 10 <= b.count {
+            guard let frameID = String(bytes: b[pos..<pos + 4], encoding: .ascii),
+                  frameID.count == 4, frameID != "\0\0\0\0" else { return nil }
+            let raw = UInt32(b[pos + 4]) << 24 | UInt32(b[pos + 5]) << 16
+                    | UInt32(b[pos + 6]) << 8 | UInt32(b[pos + 7])
+            // v2.4 帧大小为 syncsafe，v2.3 为普通大端
+            let size = major == 4 ? syncsafe(raw) : Int(raw)
+            let bodyStart = pos + 10
+            guard size > 0, bodyStart + size <= b.count else { return nil }
+            if frameID == "APIC" {
+                return parseAPICPayload(Array(b[bodyStart..<bodyStart + size]))
+            }
+            pos = bodyStart + size
+        }
+        return nil
+    }
+
+    private static func syncsafe(_ v: UInt32) -> Int {
+        Int(v & 0x7F) | Int((v >> 8) & 0x7F) << 7 | Int((v >> 16) & 0x7F) << 14 | Int((v >> 24) & 0x7F) << 21
+    }
+
+    /// APIC 负载：编码(1) + MIME(\0 结尾 ASCII) + 图片类型(1) + 描述(编码相关结尾) + 图片数据
+    private static func parseAPICPayload(_ p: [UInt8]) -> Data? {
+        guard p.count > 4 else { return nil }
+        let encoding = p[0]
+        var i = 1
+        // MIME：找 0x00
+        while i < p.count, p[i] != 0 { i += 1 }
+        guard i + 1 < p.count else { return nil }
+        i += 1          // 跳过 MIME 的 \0
+        i += 1          // 跳过图片类型字节
+        // 描述：编码 1/2（UTF-16）以 00 00 结尾，其余以 00 结尾
+        if encoding == 1 || encoding == 2 {
+            while i + 1 < p.count, !(p[i] == 0 && p[i + 1] == 0) { i += 2 }
+            i += 2
+        } else {
+            while i < p.count, p[i] != 0 { i += 1 }
+            i += 1
+        }
+        guard i < p.count else { return nil }
+        return Data(p[i...])
+    }
+}

@@ -287,6 +287,7 @@ final class PlayerModel: ObservableObject {
                   self.playlist.indices.contains(ni) else { return }
             self.currentIndex = ni
             self.position = 0
+            self.refreshCover()
             self.persist()
             self.updateNowPlaying()
             self.queueNextForGapless()
@@ -601,6 +602,7 @@ final class PlayerModel: ObservableObject {
             state = .stopped
             currentIndex = nil
             position = 0
+            coverImage = nil
         } else if let cur = currentIndex {
             // 索引随删除前移
             let removed = offsets.filter { $0 < cur }.count
@@ -634,6 +636,41 @@ final class PlayerModel: ObservableObject {
         return arr
     }
 
+    // MARK: 封面
+    @Published var coverImage: NSImage?
+    private let coverCacheLock = NSLock()
+    nonisolated(unsafe) private var coverCache: [String: Data?] = [:]   // nil = 已确认无封面
+
+    /// 封面缓存键：文件路径 + ISO 曲目号
+    nonisolated private func coverKey(for item: PlaylistItem) -> String {
+        item.url.path + (item.isoTrackIndex.map { "#track=\($0)" } ?? "")
+    }
+
+    /// 加载条目封面（带缓存）；无封面返回 nil
+    nonisolated func loadCover(for item: PlaylistItem) -> Data? {
+        let key = coverKey(for: item)
+        coverCacheLock.lock()
+        if let cached = coverCache[key] {
+            coverCacheLock.unlock()
+            return cached
+        }
+        coverCacheLock.unlock()
+        let data = CoverArt.extract(from: item.url)
+        coverCacheLock.lock()
+        coverCache[key] = data
+        coverCacheLock.unlock()
+        return data
+    }
+
+    /// 切歌后刷新封面（缓存命中则同步显示）
+    private func refreshCover() {
+        guard let item = currentItem else {
+            coverImage = nil
+            return
+        }
+        coverImage = loadCover(for: item).flatMap { NSImage(data: $0) }
+    }
+
     // MARK: 播放控制
 
     /// 仅更新 UI 选中状态（不触碰引擎）；乐观更新进度与电平，切歌瞬间界面即反映
@@ -643,6 +680,7 @@ final class PlayerModel: ObservableObject {
         position = 0
         meterL = 0
         meterR = 0
+        refreshCover()
         persist()
     }
 
@@ -680,6 +718,7 @@ final class PlayerModel: ObservableObject {
                 self.position = 0
                 self.statusMessage = ""
                 self.playingDeviceUID = devUID
+                self.refreshCover()
                 self.queueNextForGapless()
                 self.updateNowPlaying()
             }
@@ -692,6 +731,7 @@ final class PlayerModel: ObservableObject {
         if let src = try? openSource(for: playlist[index]), engine.switchTrack(src) {
             currentIndex = index
             position = 0
+            refreshCover()
             persist()
             queueNextForGapless()
             updateNowPlaying()
@@ -1053,6 +1093,30 @@ struct ContentView: View {
         }
     }
 
+    /// 封面缩略图：无封面时显示主题化占位图标（波形），不留空白
+    private var coverArt: some View {
+        Group {
+            if let img = model.coverImage {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    theme.accent.opacity(0.12)
+                    Image(systemName: "waveform.path")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(theme.accent.opacity(0.85))
+                }
+            }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.12), lineWidth: 1))
+        .holeFreeZone()
+    }
+
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
     private var header: some View {
         ZStack {
@@ -1163,15 +1227,18 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
-            MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
-                        font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
-                        showCursor: theme.crtGlow, cursorColor: theme.accent)
-                .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
-                .crtGlowText(theme)
-                .frame(maxWidth: 480)   // 固定宽度，超出部分滚动显示
-                .holeFreeZone()
+            HStack(spacing: 12) {
+                coverArt
+                VStack(spacing: 10) {
+                    MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
+                                font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
+                                showCursor: theme.crtGlow, cursorColor: theme.accent)
+                        .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
+                        .crtGlowText(theme)
+                        .frame(maxWidth: 400)   // 固定宽度，超出部分滚动显示
+                        .holeFreeZone()
 
-            if let info = model.currentInfo {
+                    if let info = model.currentInfo {
                 // 信号链：源规格 → 输出方式与载波率
                 HStack(spacing: 6) {
                     Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
@@ -1222,6 +1289,8 @@ struct ContentView: View {
                 Text("Add .dsf / .dff files to start playing")
                     .font(.caption).foregroundStyle(.secondary)
                     .holeFreeZone()
+            }
+                }
             }
 
             // 进度（收窄，两侧露出冲孔）

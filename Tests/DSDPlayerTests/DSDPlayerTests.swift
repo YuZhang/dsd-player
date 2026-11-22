@@ -329,6 +329,59 @@ final class DSDPlayerTests: XCTestCase {
                        [0, 1, 2])
     }
 
+    /// 构造 ID3v2.4 APIC 标签：编码 0 + "image/png\0" + 类型 3 + 空描述 + 图片数据
+    private func makeID3WithAPIC(png: Data) -> Data {
+        var apic: [UInt8] = [0]
+        apic.append(contentsOf: "image/png".utf8); apic.append(0)
+        apic.append(3)
+        apic.append(0)
+        apic.append(contentsOf: png)
+        func syncsafe(_ n: Int) -> [UInt8] {
+            [UInt8((n >> 21) & 0x7F), UInt8((n >> 14) & 0x7F), UInt8((n >> 7) & 0x7F), UInt8(n & 0x7F)]
+        }
+        var frame = Array("APIC".utf8)
+        frame.append(contentsOf: syncsafe(apic.count))
+        frame.append(contentsOf: [0, 0])
+        frame.append(contentsOf: apic)
+        var id3: [UInt8] = [0x49, 0x44, 0x33, 4, 0, 0]
+        id3.append(contentsOf: syncsafe(frame.count))
+        id3.append(contentsOf: frame)
+        return Data(id3)
+    }
+
+    func testExtractCoverFromDSF() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cover_test.dsf")
+        try makeDSF(url: url, bytesPerChannel: 4096) { _, i in UInt8(i % 251) }
+        let h = try FileHandle(forWritingTo: url)
+        h.seekToEndOfFile(); h.write(makeID3WithAPIC(png: png)); try h.close()
+        XCTAssertEqual(CoverArt.extract(from: url), png)
+
+        // 无标签文件返回 nil
+        let plain = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nocover_test.dsf")
+        try makeDSF(url: plain, bytesPerChannel: 4096) { _, i in UInt8(i % 251) }
+        XCTAssertNil(CoverArt.extract(from: plain))
+    }
+
+    func testExtractCoverFromDFF() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 9, 8, 7])
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cover_test.dff")
+        try makeDFF(url: url, bytesPerChannel: 4096) { _, i in UInt8(i % 251) }
+        let id3 = [UInt8](makeID3WithAPIC(png: png))
+        // "ID3 " chunk：size = 负载字节数（大端，不含头），偶数填充
+        var chunk = Array("ID3 ".utf8)
+        let size = id3.count
+        chunk.append(UInt8((size >> 56) & 0xFF)); chunk.append(UInt8((size >> 48) & 0xFF))
+        chunk.append(UInt8((size >> 40) & 0xFF)); chunk.append(UInt8((size >> 32) & 0xFF))
+        chunk.append(UInt8((size >> 24) & 0xFF)); chunk.append(UInt8((size >> 16) & 0xFF))
+        chunk.append(UInt8((size >> 8) & 0xFF)); chunk.append(UInt8(size & 0xFF))
+        chunk.append(contentsOf: id3)
+        if id3.count % 2 == 1 { chunk.append(0) }
+        let h = try FileHandle(forWritingTo: url)
+        h.seekToEndOfFile(); h.write(Data(chunk)); try h.close()
+        XCTAssertEqual(CoverArt.extract(from: url), png)
+    }
+
     func testSavedStateRoundTrip() throws {        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
                                   playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
                                   pcmRateBoost: 1,
