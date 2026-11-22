@@ -1435,11 +1435,12 @@ struct ContentView: View {
                                 .background {
                                     GeometryReader { geo in
                                         Color.clear.onDrop(
-                                            of: [UTType.plainText],
+                                            of: [UTType.plainText, UTType.fileURL],
                                             delegate: PlaylistRowDropDelegate(
                                                 index: idx, rowHeight: geo.size.height,
                                                 draggingID: $draggingID, dropIndex: $dropIndex,
-                                                perform: performRowMove))
+                                                perform: performRowMove,
+                                                onFiles: { urls in model.add(urls: urls) }))
                                     }
                                 }
                                 .contextMenu {
@@ -1469,10 +1470,11 @@ struct ContentView: View {
                 }
                 .frame(height: 360)   // 固定高度：约 10 行
                 // 拖到列表空白区域 = 放到末尾
-                .onDrop(of: [UTType.plainText], delegate: PlaylistRowDropDelegate(
+                .onDrop(of: [UTType.plainText, UTType.fileURL], delegate: PlaylistRowDropDelegate(
                     index: model.playlist.count, rowHeight: .infinity,
                     draggingID: $draggingID, dropIndex: $dropIndex,
-                    perform: performRowMove))
+                    perform: performRowMove,
+                    onFiles: { urls in model.add(urls: urls) }))
             }
         }
         .frame(maxWidth: .infinity)
@@ -1954,23 +1956,37 @@ private struct PlaylistRowDropDelegate: DropDelegate {
     @Binding var draggingID: PlaylistItem.ID?
     @Binding var dropIndex: Int?
     let perform: (Int, Bool) -> Bool   // (目标行下标, 插到该行之前)
+    let onFiles: ([URL]) -> Void       // 外部文件拖入
 
     func validateDrop(info: DropInfo) -> Bool {
-        draggingID != nil   // 只接受应用内部的排序拖拽；外部文件由外层 onDrop 处理
+        if draggingID != nil { return true }
+        return info.hasItemsConforming(to: [UTType.fileURL])
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard draggingID != nil else { return nil }
-        let before = rowHeight == .infinity || info.location.y < rowHeight / 2
-        dropIndex = before ? index : index + 1
-        return DropProposal(operation: .move)
+        if draggingID != nil {
+            let before = rowHeight == .infinity || info.location.y < rowHeight / 2
+            dropIndex = before ? index : index + 1
+            return DropProposal(operation: .move)
+        }
+        return info.hasItemsConforming(to: [UTType.fileURL]) ? DropProposal(operation: .copy) : nil
     }
 
     func performDrop(info: DropInfo) -> Bool {
         defer { draggingID = nil; dropIndex = nil }
-        guard draggingID != nil else { return false }
-        let before = rowHeight == .infinity || info.location.y < rowHeight / 2
-        return perform(index, before)
+        if draggingID != nil {
+            let before = rowHeight == .infinity || info.location.y < rowHeight / 2
+            return perform(index, before)
+        }
+        let providers = info.itemProviders(for: [UTType.fileURL])
+        guard !providers.isEmpty else { return false }
+        for p in providers {
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in onFiles([url]) }
+            }
+        }
+        return true
     }
 
     func dropExited(info: DropInfo) {
