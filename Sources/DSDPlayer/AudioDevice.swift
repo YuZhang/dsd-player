@@ -163,6 +163,7 @@ enum AudioDeviceManager {
     /// bitPerfect 时（DoP）强制音量 1.0 并取消静音，保证位元不被 HAL 改动。
     static func configureDevice(_ device: AudioDeviceID, carrierRate: Double,
                                 bitPerfect: Bool = true) throws {
+        tlog("DEVICE configureDevice carrier=\(carrierRate)")
         guard let streamID = firstOutputStream(device) else {
             throw AudioDeviceError.noSupportedFormat(carrierRate)
         }

@@ -8,6 +8,17 @@ enum OutputMode: Int {
     case pcm   // DSD→PCM 转换（任意设备可用，系统音量可调）
 }
 
+/// 临时性能打点：追加写入 /tmp/dsdplayer_timing.log
+func tlog(_ msg: String) {
+    let line = String(format: "%.3f %@\n", Date().timeIntervalSince1970, msg)
+    guard let d = line.data(using: .utf8) else { return }
+    if let h = FileHandle(forWritingAtPath: "/tmp/dsdplayer_timing.log") {
+        h.seekToEndOfFile(); h.write(d); try? h.close()
+    } else {
+        FileManager.default.createFile(atPath: "/tmp/dsdplayer_timing.log", contents: d)
+    }
+}
+
 /// 播放引擎：DSD 文件 → DoP 帧 / PCM 采样 → 环形缓冲 → AUHAL 直出。
 /// 渲染回调运行在 CoreAudio 实时线程，只读环形缓冲，不加锁。
 final class PlaybackEngine: @unchecked Sendable {
@@ -84,6 +95,7 @@ final class PlaybackEngine: @unchecked Sendable {
     }
 
     func load(source src: DSDSource) throws {
+        tlog("ENGINE load entered")
         stop()
         feederLock.lock()
         source = src
@@ -129,12 +141,14 @@ final class PlaybackEngine: @unchecked Sendable {
         if state == .playing { return }
 
         let carrier = Double(outputRate(for: src))
+        tlog("ENGINE play() entered")
         if outputMode == .dop {
             // DoP 位元直通：独占设备并强制匹配格式
             AudioDeviceManager.acquireHogMode(device)
             try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
                                                    bitPerfect: true)
         }
+        tlog("ENGINE before setupAudioUnit")
         // PCM 模式：不动设备格式（蓝牙等设备不能承受高速率），HAL 自动重采样
         deviceID = device
         try setupAudioUnit(device: device, carrier: carrier, channels: src.info.channelCount)
@@ -156,14 +170,17 @@ final class PlaybackEngine: @unchecked Sendable {
         feederLock.unlock()
 
         startFeeder()
+        tlog("ENGINE feeder started")
         // 预缓冲 ~100ms，降低开跑即欠载概率
         let prefillSamples = src.info.channelCount * Int(carrier) / 10
         while ring.availableToRead < prefillSamples,
               !eofReached.load(ordering: .relaxed) {
             Thread.sleep(forTimeInterval: 0.005)
         }
+        tlog("ENGINE prefill done")
 
         let err = AudioOutputUnitStart(audioUnit!)
+        tlog("ENGINE AudioOutputUnitStart done err=\(err)")
         guard err == noErr else { throw DSDError.outputDevice("Failed to start audio output (\(err))") }
         state = .playing
     }
@@ -260,6 +277,7 @@ final class PlaybackEngine: @unchecked Sendable {
 
     /// 无缝切换到同规格曲目（播放/暂停中有效）；规格不符返回 false，调用方走完整重开
     func switchTrack(_ src: DSDSource) -> Bool {
+        tlog("ENGINE switchTrack entered state=\(state)")
         guard state == .playing || state == .paused,
               let cur = source,
               src.info.dsdSampleRate == cur.info.dsdSampleRate,
@@ -345,6 +363,7 @@ final class PlaybackEngine: @unchecked Sendable {
             AudioComponentInstanceDispose(unit)
             throw DSDError.outputDevice("Failed to initialize audio unit (\(err))")
         }
+        tlog("ENGINE setupAudioUnit done")
         audioUnit = unit
     }
 

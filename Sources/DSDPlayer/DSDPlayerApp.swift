@@ -219,14 +219,16 @@ final class PlayerModel: ObservableObject {
         }
         engine.onError = { [weak self] msg in self?.statusMessage = msg }
         engine.onTrackAdvanced = { [weak self] in
+            tlog("MAIN onTrackAdvanced (boundary committed)")
             guard let self, let ni = self.queuedNextIndex,
                   self.playlist.indices.contains(ni) else { return }
             self.currentIndex = ni
+            self.position = 0
             self.persist()
-            self.queueNextForGapless()
             self.updateNowPlaying()
+            self.queueNextForGapless()
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
         // VU 电平表独立 30Hz 刷新，保证动画流畅
@@ -278,13 +280,16 @@ final class PlayerModel: ObservableObject {
     }
 
     private func tick() {
-        guard state == .playing || state == .paused else { return }
-        position = engine.positionSeconds
+        // 切换中也保持刷新：进度显示乐观值（0），避免冻结在上首歌的位置
+        guard state == .playing || state == .paused || switchingCount > 0 else { return }
+        if switchingCount == 0 {
+            position = engine.positionSeconds
+        }
         updateNowPlaying()
     }
 
     private func meterTick() {
-        if state == .playing {
+        if state == .playing || switchingCount > 0 {
             let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
             let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
             // 快攻慢放（模拟表针动态）
@@ -298,11 +303,12 @@ final class PlayerModel: ObservableObject {
 
     // MARK: 无缝续播预排
 
-    /// 按当前播放模式预排下一首，交给引擎在同规格时无缝衔接
+    /// 按当前播放模式预排下一首，交给引擎在同规格时无缝衔接。
+    /// 打开文件放到引擎队列异步做，避免 ISO 解析等阻塞主线程
     private func queueNextForGapless() {
         guard let idx = currentIndex, !playlist.isEmpty else {
             queuedNextIndex = nil
-            engine.setNext(nil)
+            engineQueue.async { self.engine.setNext(nil) }
             return
         }
         let nextIdx: Int?
@@ -313,10 +319,13 @@ final class PlayerModel: ObservableObject {
         case .shuffle: nextIdx = playlist.count > 1 ? randomIndex(excluding: idx) : idx
         }
         queuedNextIndex = nextIdx
-        if let ni = nextIdx {
-            engine.setNext(try? openSource(for: playlist[ni]))
-        } else {
-            engine.setNext(nil)
+        guard let ni = nextIdx else {
+            engineQueue.async { self.engine.setNext(nil) }
+            return
+        }
+        let item = playlist[ni]
+        engineQueue.async {
+            self.engine.setNext(try? self.openSource(for: item))
         }
     }
 
@@ -412,6 +421,7 @@ final class PlayerModel: ObservableObject {
         playGeneration &+= 1
         let gen = playGeneration
         switchingCount += 1
+        position = pos   // 乐观更新：切换瞬间进度条即到位
         let item = playlist[idx]
         let devID = dev.id, devUID = dev.uid
         let mode = outputMode, boost = pcmRateBoost
@@ -538,10 +548,13 @@ final class PlayerModel: ObservableObject {
 
     // MARK: 播放控制
 
-    /// 仅更新 UI 选中状态（不触碰引擎）
+    /// 仅更新 UI 选中状态（不触碰引擎）；乐观更新进度与电平，切歌瞬间界面即反映
     private func select(at index: Int) {
         guard playlist.indices.contains(index) else { return }
         currentIndex = index
+        position = 0
+        meterL = 0
+        meterR = 0
         persist()
     }
 
@@ -554,6 +567,7 @@ final class PlayerModel: ObservableObject {
         }
         guard playlist.indices.contains(index) else { return }
         select(at: index)
+        tlog("MAIN play(at:) selected idx=\(index)")
         playGeneration &+= 1
         let gen = playGeneration
         switchingCount += 1
@@ -571,6 +585,7 @@ final class PlayerModel: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.switchingCount -= 1
+                tlog("MAIN play completion err=\(error.map { String(describing: $0) } ?? "nil")")
                 guard self.playGeneration == gen else { return }
                 if let error {
                     self.statusMessage = error.localizedDescription
@@ -588,7 +603,9 @@ final class PlayerModel: ObservableObject {
     /// 优先无缝切换（同规格曲目保持音频链路不断），否则完整重开
     private func playOrSwitch(to index: Int) {
         guard playlist.indices.contains(index) else { return }
+        tlog("MAIN playOrSwitch idx=\(index)")
         if let src = try? openSource(for: playlist[index]), engine.switchTrack(src) {
+            tlog("MAIN playOrSwitch gapless ok")
             currentIndex = index
             position = 0
             persist()
@@ -600,6 +617,7 @@ final class PlayerModel: ObservableObject {
     }
 
     func togglePlay() {
+        tlog("MAIN togglePlay state=\(state)")
         switch state {
         case .stopped, .finished:
             if switchingCount > 0 { return }   // 加载中，忽略重复指令
