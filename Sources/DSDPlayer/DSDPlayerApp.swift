@@ -1109,7 +1109,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(width: 52, height: 52)
+        .frame(width: 78, height: 78)   // 与右栏三行（歌名+信息+进度）总高一致
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -1227,95 +1227,96 @@ struct ContentView: View {
     // 当前曲目信息
     private var nowPlaying: some View {
         VStack(spacing: 10) {
+            // 封面 + 右栏（歌名 / 格式信息 / 进度），封面高度与右栏三行总高一致
             HStack(spacing: 12) {
                 coverArt
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
                                 font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
                                 showCursor: theme.crtGlow, cursorColor: theme.accent)
                         .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
                         .crtGlowText(theme)
-                        .frame(maxWidth: 400)   // 固定宽度，超出部分滚动显示
+                        .frame(maxWidth: 420)   // 固定宽度，超出部分滚动显示
                         .holeFreeZone()
 
                     if let info = model.currentInfo {
-                // 信号链：源规格 → 输出方式与载波率
-                HStack(spacing: 6) {
-                    Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                    if model.outputMode == .dop {
-                        Text("DoP \(Int(info.dopCarrierRate / 1000))kHz")
-                            .foregroundStyle(theme.accent)
-                    } else {
-                        // PCM 输出采样率：点击切换（DSD率/32 的 1/2/4 倍）
-                        let base = Int(info.dsdSampleRate) / 32
-                        Menu {
-                            ForEach(0..<3, id: \.self) { b in
-                                let rate = base * (1 << b)
-                                Button {
-                                    model.setPcmRateBoost(b)
-                                } label: {
-                                    if model.pcmRateBoost == b {
-                                        Label("\(rate / 1000)kHz", systemImage: "checkmark")
-                                    } else {
-                                        Text("\(rate / 1000)kHz")
+                        // 信号链：源规格 → 输出方式与载波率（紧凑排版）
+                        HStack(spacing: 4) {
+                            Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                            if model.outputMode == .dop {
+                                Text("DoP \(Int(info.dopCarrierRate / 1000))kHz")
+                                    .foregroundStyle(theme.accent)
+                            } else {
+                                // PCM 输出采样率：点击切换（DSD率/32 的 1/2/4 倍）
+                                let base = Int(info.dsdSampleRate) / 32
+                                Menu {
+                                    ForEach(0..<3, id: \.self) { b in
+                                        let rate = base * (1 << b)
+                                        Button {
+                                            model.setPcmRateBoost(b)
+                                        } label: {
+                                            if model.pcmRateBoost == b {
+                                                Label("\(rate / 1000)kHz", systemImage: "checkmark")
+                                            } else {
+                                                Text("\(rate / 1000)kHz")
+                                            }
+                                        }
                                     }
+                                } label: {
+                                    Text("PCM \(base * (1 << model.pcmRateBoost) / 1000)kHz")
+                                        .foregroundStyle(theme.accent)
                                 }
+                                .menuStyle(.borderlessButton)
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .help("PCM output sample rate (click to change)")
                             }
-                        } label: {
-                            Text("PCM \(base * (1 << model.pcmRateBoost) / 1000)kHz")
-                                .foregroundStyle(theme.accent)
+                            // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
+                            HStack(spacing: 3) {
+                                Circle().fill(theme.accent).frame(width: 4, height: 4)
+                                Text("Bit-Perfect")
+                            }
+                            .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
+                            .foregroundStyle(theme.accent)
                         }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("PCM output sample rate (click to change)")
+                        .font(theme.proLook ? .caption2.monospaced() : .caption2.monospacedDigit())   // 专业仪器读数用等宽字体
+                        .crtGlowText(theme)
+                        .holeFreeZone()
+                    } else {
+                        Text("Add .dsf / .dff files to start playing")
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .holeFreeZone()
                     }
-                    // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
-                    HStack(spacing: 3) {
-                        Circle().fill(theme.accent).frame(width: 4, height: 4)
-                        Text("Bit-Perfect")
-                    }
-                    .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
-                    .foregroundStyle(theme.accent)
-                }
-                .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
-                .crtGlowText(theme)
-                .holeFreeZone()
-            } else {
-                Text("Add .dsf / .dff files to start playing")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .holeFreeZone()
-            }
-                }
-            }
 
-            // 进度（收窄，两侧露出冲孔）
-            HStack(spacing: 10) {
-                Text(formatTime(model.position))
-                    .font(timeFont)   // Terminal 用液晶数字并放大
-                    .foregroundStyle(.secondary)
-                    .frame(height: 22)   // 所有皮肤统一时间标签高度
-                    .crtGlowText(theme)
-                ThemedSlider(
-                    value: Binding(
-                        get: { model.position },
-                        set: { model.position = $0 }),
-                    upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
-                    enabled: model.state != .idle,
-                    theme: theme,
-                    onEditingEnded: { model.seek(to: model.position) })
-                Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
-                    .font(timeFont)
-                    .foregroundStyle(.secondary)
-                    .frame(height: 22)
-                    .crtGlowText(theme)
+                    // 进度（位于封面右侧栏内，随封面加宽而缩短）
+                    HStack(spacing: 10) {
+                        Text(formatTime(model.position))
+                            .font(timeFont)   // Terminal 用液晶数字并放大
+                            .foregroundStyle(.secondary)
+                            .frame(height: 22)   // 所有皮肤统一时间标签高度
+                            .crtGlowText(theme)
+                        ThemedSlider(
+                            value: Binding(
+                                get: { model.position },
+                                set: { model.position = $0 }),
+                            upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
+                            enabled: model.state != .idle,
+                            theme: theme,
+                            onEditingEnded: { model.seek(to: model.position) })
+                        Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
+                            .font(timeFont)
+                            .foregroundStyle(.secondary)
+                            .frame(height: 22)
+                            .crtGlowText(theme)
+                    }
+                    .holeFreeZone()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .holeFreeZone()
-            .padding(.horizontal, 56)   // 避让区只含内容；实测补偿后两侧恰好露出 3 个冲孔
 
             // VU 电平表（左声道 ← 指示灯 → 右声道，收窄）
             VUMeter(left: model.meterL, right: model.meterR, theme: theme,
