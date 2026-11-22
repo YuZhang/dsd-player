@@ -441,7 +441,17 @@ final class PlayerModel: ObservableObject {
 
     var deviceSupportsCarrier: Bool {
         guard let dev = selectedDevice, let info = currentInfo else { return true }
-        return dev.supports(rate: activeOutputRate(for: info))
+        // PCM 模式不独占设备：CoreAudio 会自动重采样到设备原生率，任意 PCM 率均可播放；
+        // 只有 DoP 位元直通要求设备严格支持载波率
+        guard outputMode == .dop else { return true }
+        return dev.supports(rate: info.dopCarrierRate)
+    }
+
+    /// 计算设备实际可用的 PCM 提升档：用户偏好超出设备能力时逐档降低
+    nonisolated static func supportedBoost(baseRate: Int, preferred: Int, device: OutputDevice) -> Int {
+        var b = max(0, min(2, preferred))
+        while b > 0, !device.supports(rate: Double(baseRate * (1 << b))) { b -= 1 }
+        return b
     }
 
     /// 需要提示用户的信息（设备不兼容 / 错误），nil 表示一切正常
@@ -492,7 +502,9 @@ final class PlayerModel: ObservableObject {
         engineQueue.async { [weak self] in
             guard let self else { return }
             self.engine.outputMode = mode
-            self.engine.pcmRateBoost = boost
+            self.engine.pcmRateBoost = Self.supportedBoost(
+                baseRate: Int(item.info.dsdSampleRate) / 32,
+                preferred: boost, device: dev)
             var error: Error?
             do {
                 let src = try self.openSource(for: item)
@@ -700,6 +712,9 @@ final class PlayerModel: ObservableObject {
         let devID = dev.id, devUID = dev.uid
         engineQueue.async { [weak self] in
             guard let self else { return }
+            self.engine.pcmRateBoost = Self.supportedBoost(
+                baseRate: Int(item.info.dsdSampleRate) / 32,
+                preferred: self.pcmRateBoost, device: dev)
             var error: Error?
             do {
                 let src = try self.openSource(for: item)
@@ -921,6 +936,7 @@ struct ContentView: View {
     @State private var anchorIndex: Int?   // Shift 范围选择的锚点
     @State private var draggingID: PlaylistItem.ID?   // 正在拖拽的条目
     @State private var dropIndex: Int?   // 插入位置（0...count，nil = 无）
+    @State private var showCoverPreview = false   // 封面大图预览
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
     @State private var deviceHover = false
@@ -1035,6 +1051,12 @@ struct ContentView: View {
             model.engine.stop()
         }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // 去掉标题栏系统材质
+        // 封面大图预览：点击封面打开，点任意处关闭
+        .overlay {
+            if showCoverPreview, let img = model.coverImage {
+                CoverPreview(image: img) { showCoverPreview = false }
+            }
+        }
         .frame(width: 560)
         .background(WindowConfigurator())   // 标题栏完全透明
     }
@@ -1111,6 +1133,16 @@ struct ContentView: View {
         }
         .frame(width: 78, height: 78)   // 与右栏三行（歌名+信息+进度）总高一致
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture {
+            if model.coverImage != nil { showCoverPreview = true }
+        }
+        .onHover { h in
+            if model.coverImage != nil {
+                if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+        }
+        .help(model.coverImage != nil ? "Click to view full size" : "")
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.12), lineWidth: 1))
@@ -1240,9 +1272,9 @@ struct ContentView: View {
                         .holeFreeZone()
 
                     if let info = model.currentInfo {
-                        // 信号链：源规格 → 输出方式与载波率（紧凑排版）
+                        // 信号链：源规格 → 输出方式与载波率（窄条排版，字号保持 caption）
                         HStack(spacing: 4) {
-                            Text("\(info.formatName) · DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
+                            Text("DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
                                 .foregroundStyle(.secondary)
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 8, weight: .bold))
@@ -1251,23 +1283,29 @@ struct ContentView: View {
                                 Text("DoP \(Int(info.dopCarrierRate / 1000))kHz")
                                     .foregroundStyle(theme.accent)
                             } else {
-                                // PCM 输出采样率：点击切换（DSD率/32 的 1/2/4 倍）
+                                // PCM 输出采样率：点击切换（DSD率/32 的 1/2/4 倍），
+                                // 设备不支持的档位禁用，勾选的是实际生效档（可能被设备能力降档）
                                 let base = Int(info.dsdSampleRate) / 32
+                                let eff = PlayerModel.supportedBoost(
+                                    baseRate: base, preferred: model.pcmRateBoost,
+                                    device: model.selectedDevice ?? OutputDevice(id: 0, uid: "", name: "", isUSB: false, supportedRates: []))
                                 Menu {
                                     ForEach(0..<3, id: \.self) { b in
                                         let rate = base * (1 << b)
+                                        let ok = model.selectedDevice?.supports(rate: Double(rate)) ?? true
                                         Button {
                                             model.setPcmRateBoost(b)
                                         } label: {
-                                            if model.pcmRateBoost == b {
+                                            if eff == b {
                                                 Label("\(rate / 1000)kHz", systemImage: "checkmark")
                                             } else {
                                                 Text("\(rate / 1000)kHz")
                                             }
                                         }
+                                        .disabled(!ok)
                                     }
                                 } label: {
-                                    Text("PCM \(base * (1 << model.pcmRateBoost) / 1000)kHz")
+                                    Text("\(base * (1 << eff) / 1000)kHz")
                                         .foregroundStyle(theme.accent)
                                 }
                                 .menuStyle(.borderlessButton)
@@ -1283,12 +1321,12 @@ struct ContentView: View {
                             .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
                             .foregroundStyle(theme.accent)
                         }
-                        .font(theme.proLook ? .caption2.monospaced() : .caption2.monospacedDigit())   // 专业仪器读数用等宽字体
+                        .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
                         .crtGlowText(theme)
                         .holeFreeZone()
                     } else {
                         Text("Add .dsf / .dff files to start playing")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                             .holeFreeZone()
                     }
 
@@ -1314,6 +1352,7 @@ struct ContentView: View {
                             .crtGlowText(theme)
                     }
                     .holeFreeZone()
+                    .padding(.trailing, 20)   // 进度条进一步收窄
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1948,6 +1987,29 @@ private struct WindowConfigurator: NSViewRepresentable {
     }
 }
 
+// MARK: - 封面大图预览
+
+/// 点击封面查看原图：暗色背景 + 等比大图，点任意处关闭
+private struct CoverPreview: View {
+    let image: NSImage
+    let onClose: () -> Void
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.88)
+                .onTapGesture(perform: onClose)
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 460, height: 460)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(radius: 24)
+                .onTapGesture(perform: onClose)
+        }
+        .frame(width: 560, height: 703)
+        .transition(.opacity)
+    }
+}
+
 // MARK: - 播放列表拖放
 
 /// 行级拖放代理：拖拽悬停时按落点上半/下半计算插入位置，放下时执行整组移动
@@ -2025,7 +2087,7 @@ struct MarqueeText: View {
                 }
             } else {
                 contentWithCursor
-                    .frame(maxWidth: .infinity)   // 短文本居中（光标紧跟文字）
+                    .frame(maxWidth: .infinity, alignment: .leading)   // 左对齐
             }
         }
         .frame(height: 26)
