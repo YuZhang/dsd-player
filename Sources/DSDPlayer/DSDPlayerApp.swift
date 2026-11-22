@@ -609,6 +609,31 @@ final class PlayerModel: ObservableObject {
         persist()
     }
 
+    /// 拖拽排序：sources 中的条目保持相对顺序，整体插入到原数组边界 boundary 处
+    /// （boundary ∈ 0...count，表示"插到原第 boundary 项之前"）
+    func move(from sources: IndexSet, toBoundary boundary: Int) {
+        guard !sources.isEmpty else { return }
+        let order = Self.reorderedIndices(count: playlist.count, sources: sources, boundary: boundary)
+        let current = currentIndex.map { playlist[$0] }
+        playlist = order.map { playlist[$0] }
+        if let current, let i = playlist.firstIndex(of: current) {
+            currentIndex = i   // 当前播放曲目随排序重定位
+        }
+        persist()
+    }
+
+    /// 重排下标：sources（保持相对顺序）从原数组取出后插入 boundary 边界处
+    nonisolated static func reorderedIndices(count: Int, sources: IndexSet, boundary: Int) -> [Int] {
+        let moving = sources.sorted()
+        guard !moving.isEmpty, moving.count <= count else { return Array(0..<count) }
+        var arr = Array(0..<count)
+        let removedBefore = moving.filter { $0 < boundary }.count
+        let insertAt = max(0, min(count - moving.count, boundary - removedBefore))
+        arr.removeAll { sources.contains($0) }
+        arr.insert(contentsOf: moving, at: insertAt)
+        return arr
+    }
+
     // MARK: 播放控制
 
     /// 仅更新 UI 选中状态（不触碰引擎）；乐观更新进度与电平，切歌瞬间界面即反映
@@ -854,6 +879,8 @@ struct ContentView: View {
     @EnvironmentObject var model: PlayerModel
     @State private var selection = Set<PlaylistItem.ID>()
     @State private var anchorIndex: Int?   // Shift 范围选择的锚点
+    @State private var draggingID: PlaylistItem.ID?   // 正在拖拽的条目
+    @State private var dropIndex: Int?   // 插入位置（0...count，nil = 无）
     @State private var holeFreeRects: [CGRect] = []
     @State private var activeWarning: String?   // 非 nil 时弹告警窗
     @State private var deviceHover = false
@@ -1332,7 +1359,20 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(model.playlist.enumerated()), id: \.element.id) { idx, item in
+                            if dropIndex == idx {
+                                dropIndicator   // 插入位置指示线
+                            }
                             playlistRow(idx: idx, item: item)
+                                .background {
+                                    GeometryReader { geo in
+                                        Color.clear.onDrop(
+                                            of: [UTType.plainText],
+                                            delegate: PlaylistRowDropDelegate(
+                                                index: idx, rowHeight: geo.size.height,
+                                                draggingID: $draggingID, dropIndex: $dropIndex,
+                                                perform: performRowMove))
+                                    }
+                                }
                                 .contextMenu {
                                     if selection.contains(item.id), selection.count > 1 {
                                         Button("Remove \(selection.count) Tracks") { removeSelection() }
@@ -1352,10 +1392,18 @@ struct ContentView: View {
                                     .padding(.leading, 36)
                             }
                         }
+                        if dropIndex == model.playlist.count {
+                            dropIndicator   // 末尾插入指示线
+                        }
                     }
                     .padding(.horizontal, 8)
                 }
                 .frame(height: 360)   // 固定高度：约 10 行
+                // 拖到列表空白区域 = 放到末尾
+                .onDrop(of: [UTType.plainText], delegate: PlaylistRowDropDelegate(
+                    index: model.playlist.count, rowHeight: .infinity,
+                    draggingID: $draggingID, dropIndex: $dropIndex,
+                    perform: performRowMove))
             }
         }
         .frame(maxWidth: .infinity)
@@ -1407,6 +1455,10 @@ struct ContentView: View {
         .frame(height: 34)
         .crtGlowText(theme)
         .contentShape(Rectangle())
+        .onDrag {
+            draggingID = item.id
+            return NSItemProvider(object: item.id.uuidString as NSString)
+        }
         .onTapGesture(count: 2) { model.play(at: idx) }
         .onTapGesture(count: 1) { handleSelect(idx: idx, item: item) }
     }
@@ -1448,6 +1500,31 @@ struct ContentView: View {
         model.remove(at: idxs)
         selection = []
         anchorIndex = nil
+    }
+
+    // MARK: 拖拽排序
+
+    /// 插入位置指示线
+    private var dropIndicator: some View {
+        Rectangle()
+            .fill(theme.accent)
+            .frame(height: 2)
+            .padding(.horizontal, 8)
+    }
+
+    /// 放下执行移动：若被拖条目在多选集内则整组移动（保持相对顺序）
+    private func performRowMove(targetIndex: Int, insertBefore: Bool) -> Bool {
+        defer { draggingID = nil; dropIndex = nil }
+        guard let draggingID else { return false }
+        let sources: IndexSet
+        if selection.contains(draggingID), selection.count > 1 {
+            sources = IndexSet(model.playlist.indices.filter { selection.contains(model.playlist[$0].id) })
+        } else {
+            sources = IndexSet(model.playlist.indices.filter { model.playlist[$0].id == draggingID })
+        }
+        let boundary = insertBefore ? targetIndex : targetIndex + 1
+        model.move(from: sources, toBoundary: boundary)
+        return true
     }
 
     private func channelLabel(_ count: Int) -> String {
@@ -1796,6 +1873,39 @@ private struct WindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> View { View() }
     func updateNSView(_ nsView: View, context: Context) {
         nsView.applySettings()   // 每次 SwiftUI 更新都重新应用，防止被重置
+    }
+}
+
+// MARK: - 播放列表拖放
+
+/// 行级拖放代理：拖拽悬停时按落点上半/下半计算插入位置，放下时执行整组移动
+private struct PlaylistRowDropDelegate: DropDelegate {
+    let index: Int            // 目标行下标（拖放目标为空白区时传 count）
+    let rowHeight: CGFloat
+    @Binding var draggingID: PlaylistItem.ID?
+    @Binding var dropIndex: Int?
+    let perform: (Int, Bool) -> Bool   // (目标行下标, 插到该行之前)
+
+    func validateDrop(info: DropInfo) -> Bool {
+        draggingID != nil   // 只接受应用内部的排序拖拽；外部文件由外层 onDrop 处理
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard draggingID != nil else { return nil }
+        let before = rowHeight == .infinity || info.location.y < rowHeight / 2
+        dropIndex = before ? index : index + 1
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { draggingID = nil; dropIndex = nil }
+        guard draggingID != nil else { return false }
+        let before = rowHeight == .infinity || info.location.y < rowHeight / 2
+        return perform(index, before)
+    }
+
+    func dropExited(info: DropInfo) {
+        dropIndex = nil
     }
 }
 

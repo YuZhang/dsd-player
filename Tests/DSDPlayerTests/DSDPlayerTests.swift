@@ -304,8 +304,32 @@ final class DSDPlayerTests: XCTestCase {
         XCTAssertLessThan(luminance(Color.black), 0.45)
     }
 
-    func testSavedStateRoundTrip() throws {
-        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
+    func testPlaylistReorderIndices() throws {
+        // 单项：第 2 项移到第 5 项之前 / 之后
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 7, sources: [2], boundary: 5),
+                       [0, 1, 3, 4, 2, 5, 6])
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 7, sources: [2], boundary: 6),
+                       [0, 1, 3, 4, 5, 2, 6])
+        // 多项整组：{2,3} 移到第 5 项之前，保持相对顺序
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 7, sources: [2, 3], boundary: 5),
+                       [0, 1, 4, 2, 3, 5, 6])
+        // 移到末尾（boundary = count）
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 4, sources: [0], boundary: 4),
+                       [1, 2, 3, 0])
+        // 向前拖：第 5 项移到第 1 项之前
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 7, sources: [5], boundary: 1),
+                       [0, 5, 1, 2, 3, 4, 6])
+        // 原位放下：结果不变
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 5, sources: [2], boundary: 2),
+                       [0, 1, 2, 3, 4])
+        // 越界边界收敛到合法范围
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 3, sources: [0], boundary: 99),
+                       [1, 2, 0])
+        XCTAssertEqual(PlayerModel.reorderedIndices(count: 3, sources: [], boundary: 1),
+                       [0, 1, 2])
+    }
+
+    func testSavedStateRoundTrip() throws {        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
                                   playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
                                   pcmRateBoost: 1,
                                   customAccent: "#FF8800", customBg: "#121212", customBgOpacity: 0.6)
