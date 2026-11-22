@@ -27,7 +27,10 @@ final class DSDToPCM {
 
     init(dsdRate: UInt32, pcmRate: Int, channels: Int) {
         decimation = Int(dsdRate) / pcmRate
-        let M = 8 * decimation                       // 滤波器阶数
+        // 滤波器阶数固定 256：所有抽取档覆盖 L = 256/decimation 个抽取组。
+        // LUT 下每字节成本与 L 成正比（约 2L/dec·8 + L），固定 256 阶后高档位
+        // （如 352.8k 档 L=32）获得更陡的截止与更深的阻带，代价可控
+        let M = 256
         let fc = min(24_000.0, Double(pcmRate) * 0.45) / Double(dsdRate)
         var h = [Float](repeating: 0, count: M + 1)
         var sum: Float = 0

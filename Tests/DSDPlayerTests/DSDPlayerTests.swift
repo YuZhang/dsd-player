@@ -506,7 +506,7 @@ extension DSDPlayerTests {
     /// 与转换器完全相同的滤波器设计（taps 是 private，这里复制构造逻辑）
     private func lutTaps(dsdRate: UInt32, pcmRate: Int) -> [Float] {
         let decimation = Int(dsdRate) / pcmRate
-        let M = 8 * decimation
+        let M = 256
         let fc = min(24_000.0, Double(pcmRate) * 0.45) / Double(dsdRate)
         var h = [Float](repeating: 0, count: M + 1)
         var sum: Float = 0
