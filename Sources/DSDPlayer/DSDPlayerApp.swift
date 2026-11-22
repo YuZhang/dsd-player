@@ -1181,21 +1181,30 @@ struct ContentView: View {
                         Divider()
                         Button("Refresh Devices") { model.refreshDevices() }
                     } label: {
-                        HStack(spacing: 4) {
-                            // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
-                            Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
-                                .font(.callout)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
-                            Spacer(minLength: 0)   // 内容靠左，右侧留白
+                        // borderlessButton 忽略 label 的 frame 并取内容理想尺寸，
+                        // 用固定尺寸 Color.clear 撑起按钮宽度，HStack 才能获得满宽提议、
+                        // 让 Spacer 展开把内容顶到左边
+                        ZStack {
+                            Color.clear
+                                .frame(width: 156, height: 20)
+                            HStack(spacing: 4) {
+                                // 字符串级截断：Menu label 的 frame(maxWidth:) 度量不可靠，手动测量截断
+                                Text(truncatedDeviceName(model.selectedDevice?.name ?? "No Device"))
+                                    .font(.callout)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption2)
+                                    .foregroundStyle(deviceHover ? theme.accent : Color.secondary)
+                                Spacer(minLength: 0)   // 内容靠左，右侧留白
+                            }
+                            .padding(.horizontal, 4)
                         }
-                        .padding(.horizontal, 4)
-                        .frame(width: 164, alignment: .leading)   // 固定 label 宽度 = 胶囊宽度，内容左对齐
                         .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    // 关键：borderlessButton 按内容收缩，必须让按钮填满胶囊，
+                    // 否则文字/菜单锚点随设备名长度漂移
+                    .frame(maxWidth: .infinity)
                     .onHover { deviceHover = $0 }
                 }
                 .frame(width: 164, height: 28)   // 固定宽度：设备名变化不跳动
