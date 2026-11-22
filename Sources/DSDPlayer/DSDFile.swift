@@ -281,15 +281,35 @@ final class DFFFile: DSDSource {
 // MARK: - 内嵌封面提取（DSF/DFF 均使用 ID3v2 APIC 帧存储封面图片）
 
 enum CoverArt {
-    /// 提取封面图片数据；无封面返回 nil
+    /// 提取封面图片数据：先取文件内嵌 ID3v2 封面，缺失时查找同目录封面图片文件
     static func extract(from url: URL) -> Data? {
-        guard let ext = url.pathExtension.lowercased() as String?,
-              let fh = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? fh.close() }
-        if ext == "dsf" {
-            return extractFromDSF(fh: fh, url: url)
-        } else if ext == "dff" {
-            return extractFromDFF(fh: fh, url: url)
+        if let ext = url.pathExtension.lowercased() as String?,
+           let fh = try? FileHandle(forReadingFrom: url) {
+            defer { try? fh.close() }
+            if ext == "dsf" {
+                if let d = extractFromDSF(fh: fh, url: url) { return d }
+            } else if ext == "dff" {
+                if let d = extractFromDFF(fh: fh, url: url) { return d }
+            }
+        }
+        return extractFromFolder(url.deletingLastPathComponent())
+    }
+
+    /// 歌曲所在文件夹的封面图片：常见命名（不区分大小写）
+    private static let coverStems = ["cover", "front", "folder", "album", "artwork", "art"]
+    private static let imageExts = ["jpg", "jpeg", "png", "webp"]
+
+    private static func extractFromFolder(_ dir: URL) -> Data? {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path)
+        else { return nil }
+        let exact = Set(names.map { $0.lowercased() })
+        for stem in coverStems {
+            for ext in imageExts {
+                if exact.contains("\(stem).\(ext)") {
+                    let f = dir.appendingPathComponent("\(stem).\(ext)")
+                    if let d = try? Data(contentsOf: f), !d.isEmpty { return d }
+                }
+            }
         }
         return nil
     }

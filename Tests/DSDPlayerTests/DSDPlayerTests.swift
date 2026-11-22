@@ -382,6 +382,21 @@ final class DSDPlayerTests: XCTestCase {
         XCTAssertEqual(CoverArt.extract(from: url), png)
     }
 
+    func testCoverFallbackToFolder() throws {
+        // 无内嵌封面的文件 + 同目录 cover.jpg → 使用文件夹封面
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cover_folder_test")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("song.dsf")
+        try makeDSF(url: url, bytesPerChannel: 4096) { _, i in UInt8(i % 251) }
+        let jpg = Data([0xFF, 0xD8, 0xFF, 0xE0, 9, 9, 9])
+        try jpg.write(to: dir.appendingPathComponent("Cover.JPG"))   // 大小写不敏感
+        XCTAssertEqual(CoverArt.extract(from: url), jpg)
+        // front.png 命名同样支持；内嵌封面优先于文件夹封面
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("Cover.JPG"))
+        XCTAssertNil(CoverArt.extract(from: url))
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     func testSavedStateRoundTrip() throws {        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
                                   playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
                                   pcmRateBoost: 1,

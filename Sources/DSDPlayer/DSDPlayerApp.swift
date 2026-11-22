@@ -1262,7 +1262,8 @@ struct ContentView: View {
             // 封面 + 右栏（歌名 / 格式信息 / 进度），封面高度与右栏三行总高一致
             HStack(spacing: 12) {
                 coverArt
-                VStack(spacing: 8) {
+                // 三行左对齐：与封面距离一致（12pt）
+                VStack(alignment: .leading, spacing: 8) {
                     MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
                                 font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
                                 showCursor: theme.crtGlow, cursorColor: theme.accent)
