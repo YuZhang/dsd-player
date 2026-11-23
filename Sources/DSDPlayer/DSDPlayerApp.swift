@@ -357,11 +357,17 @@ final class PlayerModel: ObservableObject {
             let l = Double(engine.levelL.load(ordering: .relaxed)) / 1000
             let r = Double(engine.levelR.load(ordering: .relaxed)) / 1000
             // 快攻慢放（模拟表针动态；系数按 20Hz 换算，与 30Hz 时的时间常数一致）
-            meterL = max(l, meterL * 0.875)
-            meterR = max(r, meterR * 0.875)
-        } else {
-            meterL *= 0.912
-            meterR *= 0.883
+            // 值不变时不赋值，避免 @Published 空发通知驱动整窗重绘
+            let nl = max(l, meterL * 0.875)
+            let nr = max(r, meterR * 0.875)
+            if nl != meterL { meterL = nl }
+            if nr != meterR { meterR = nr }
+        } else if meterL > 0.001 || meterR > 0.001 {
+            // 暂停/停止后衰减到零即止，空闲完全不产生界面更新
+            let nl = meterL * 0.912
+            let nr = meterR * 0.883
+            meterL = nl > 0.001 ? nl : 0
+            meterR = nr > 0.001 ? nr : 0
         }
     }
 
@@ -1258,7 +1264,8 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     MarqueeText(text: model.currentItem?.title ?? "No Track Loaded",
                                 font: theme.crtGlow ? .custom("Menlo-Bold", size: 17) : .title3.weight(.semibold),
-                                showCursor: theme.crtGlow, cursorColor: theme.accent)
+                                showCursor: theme.crtGlow, cursorColor: theme.accent,
+                                scrolling: model.state == .playing)
                         .foregroundStyle(model.currentItem == nil ? .secondary : .primary)
                         .crtGlowText(theme)
                         .frame(maxWidth: 420)   // 固定宽度，超出部分滚动显示
@@ -2111,6 +2118,7 @@ struct MarqueeText: View {
     var font: Font = .title3.weight(.semibold)
     var showCursor = false      // Terminal 皮肤：光标紧跟文字末尾
     var cursorColor: Color = .primary
+    var scrolling = true        // 仅播放中滚动；暂停/停止时静止（30Hz 时间轴空耗 CPU）
 
     @State private var startDate = Date()
 
@@ -2124,7 +2132,7 @@ struct MarqueeText: View {
     var body: some View {
         GeometryReader { geo in
             let overflow = textWidth - geo.size.width
-            if overflow > 0 {
+            if overflow > 0, scrolling {
                 // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
                 TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
                     contentWithCursor
