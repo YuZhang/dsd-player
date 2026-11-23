@@ -139,8 +139,8 @@ final class PlayerModel: ObservableObject {
     private var meterTimer: Timer?
     private var queuedNextIndex: Int?   // 无缝预排的下一首
     private var playingDeviceUID: String?   // 正在播放设备的持久 UID（检测播放设备被拔出）
-    nonisolated(unsafe) private var isoCache: [String: SacdISO] = [:]   // SACD ISO 解析缓存（按路径，手动加锁）
-    private let isoCacheLock = NSLock()
+    /// SACD ISO 解析缓存：线程安全，最多驻留 2 张，防止多 ISO 内存线性增长
+    nonisolated(unsafe) let isoCache = NSCache<NSString, SacdISO>()
     /// 引擎操作串行队列：打开文件/建 AudioUnit/预缓冲等耗时操作在此执行，避免卡主线程
     private let engineQueue = DispatchQueue(label: "local.dsdplayer.engine")
     /// 正在执行的加载任务计数（主线程维护）；playGeneration 防止快速连点时旧任务覆盖新状态
@@ -207,18 +207,12 @@ final class PlayerModel: ObservableObject {
     nonisolated func openSource(for item: PlaylistItem) throws -> DSDSource {
         if let trackIdx = item.isoTrackIndex {
             let path = item.url.path
-            isoCacheLock.lock()
-            let cached = isoCache[path]
-            isoCacheLock.unlock()
-            let iso: SacdISO
-            if let cached {
-                iso = cached
-            } else {
-                iso = try SacdISO(url: item.url)
-                isoCacheLock.lock()
-                isoCache[path] = iso
-                isoCacheLock.unlock()
+            let key = path as NSString
+            if let cached = isoCache.object(forKey: key) {
+                return try cached.makeTrackSource(cached.album.tracks[trackIdx])
             }
+            let iso = try SacdISO(url: item.url)
+            isoCache.setObject(iso, forKey: key)
             return try iso.makeTrackSource(iso.album.tracks[trackIdx])
         }
         return try DSDFile.open(item.url)
@@ -270,9 +264,10 @@ final class PlayerModel: ObservableObject {
                 let isoPath = String(path[..<range.lowerBound])
                 guard FileManager.default.fileExists(atPath: isoPath) else { missing += 1; continue }
                 do {
+                    let key = isoPath as NSString
                     let iso: SacdISO
-                    if let cached = isoCache[isoPath] { iso = cached }
-                    else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); isoCache[isoPath] = iso }
+                    if let cached = isoCache.object(forKey: key) { iso = cached }
+                    else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); isoCache.setObject(iso, forKey: key) }
                     let t = iso.album.tracks[idx]
                     let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
                                        channelCount: iso.album.channelCount,
@@ -331,6 +326,7 @@ final class PlayerModel: ObservableObject {
         meterTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.meterTick() }
         }
+        isoCache.countLimit = 2
         setupRemoteCommands()
         restore()
         applyLaunchDevicePolicy()
@@ -611,7 +607,7 @@ final class PlayerModel: ObservableObject {
                 // SACD ISO：展开为曲目列表
                 do {
                     let iso = try SacdISO(url: url)
-                    isoCache[url.path] = iso
+                    isoCache.setObject(iso, forKey: url.path as NSString)
                     for t in iso.album.tracks {
                         let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
                                            channelCount: iso.album.channelCount,
@@ -690,15 +686,17 @@ final class PlayerModel: ObservableObject {
     // MARK: 封面
     @Published var coverImage: NSImage?
     private let coverCacheLock = NSLock()
-    nonisolated(unsafe) private var coverCache: [String: Data?] = [:]   // nil = 已确认无封面
+    /// 封面缓存：按文件夹键（同专辑歌曲共享一张封面），值降采样到 512px；nil = 已知无封面
+    nonisolated(unsafe) private var coverCache: [String: NSImage?] = [:]
 
-    /// 封面缓存键：文件路径 + ISO 曲目号
+    /// 封面缓存键：普通歌曲按所在文件夹；ISO 曲目按文件
     nonisolated private func coverKey(for item: PlaylistItem) -> String {
-        item.url.path + (item.isoTrackIndex.map { "#track=\($0)" } ?? "")
+        if item.isoTrackIndex != nil { return "iso:" + item.url.path }
+        return "dir:" + item.url.deletingLastPathComponent().path
     }
 
-    /// 加载条目封面（带缓存）；无封面返回 nil
-    nonisolated func loadCover(for item: PlaylistItem) -> Data? {
+    /// 加载条目封面（文件夹级缓存，降采样）；无封面返回 nil
+    nonisolated func loadCover(for item: PlaylistItem) -> NSImage? {
         let key = coverKey(for: item)
         coverCacheLock.lock()
         if let cached = coverCache[key] {
@@ -706,11 +704,33 @@ final class PlayerModel: ObservableObject {
             return cached
         }
         coverCacheLock.unlock()
-        let data = CoverArt.extract(from: item.url)
+        let image = CoverArt.extract(from: item.url)
+            .flatMap { NSImage(data: $0) }
+            .map { Self.downscale($0, maxDim: 512) }
         coverCacheLock.lock()
-        coverCache[key] = data
+        coverCache[key] = image
         coverCacheLock.unlock()
-        return data
+        return image
+    }
+
+    /// 封面降采样：缩略与预览都不需要原分辨率，限制最大边长
+    nonisolated private static func downscale(_ image: NSImage, maxDim: CGFloat) -> NSImage {
+        let size = image.size
+        let largest = max(size.width, size.height)
+        guard largest > maxDim else { return image }
+        let scale = maxDim / largest
+        let newSize = NSSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(newSize.width),
+                                         pixelsHigh: Int(newSize.height), bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return image }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: newSize), from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        let out = NSImage(size: newSize)
+        out.addRepresentation(rep)
+        return out
     }
 
     /// 切歌后刷新封面（缓存命中则同步显示）
@@ -719,7 +739,7 @@ final class PlayerModel: ObservableObject {
             coverImage = nil
             return
         }
-        coverImage = loadCover(for: item).flatMap { NSImage(data: $0) }
+        coverImage = loadCover(for: item)
     }
 
     // MARK: 播放控制
@@ -2178,6 +2198,8 @@ struct MarqueeText: View {
     @State private var startDate = Date()
     /// 文本宽度测量缓存（30Hz 滚动时不再重复字体测量）
     @State private var measuredWidth: CGFloat = 0
+    /// 鼠标悬停（悬停时才滚动歌名）
+    @State private var hovering = false
 
     /// 用 NSFont 直接测量文本宽度（title3 字号的近似值，对滚动判定足够精确）
     private func measureWidth() -> CGFloat {
@@ -2189,7 +2211,7 @@ struct MarqueeText: View {
     var body: some View {
         GeometryReader { geo in
             let overflow = measuredWidth - geo.size.width
-            if overflow > 0, scrolling {
+            if overflow > 0, scrolling, hovering {
                 // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
                 TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
                     contentWithCursor
@@ -2208,6 +2230,11 @@ struct MarqueeText: View {
         .onChange(of: text) {
             measuredWidth = measureWidth()
             startDate = Date()
+        }
+        // 悬停进入时从头开始滚动
+        .onHover { h in
+            if h { startDate = Date() }
+            hovering = h
         }
     }
 
