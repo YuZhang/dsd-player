@@ -20,7 +20,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 
 - **Formats**: DSF and DFF (DSDIFF) — DSD64 / DSD128 / DSD256, mono and stereo; **SACD ISO** (stereo area, both uncompressed DSD and DST-compressed frames decoded in real time)
 - **DoP bit-perfect output**: raw DSD bits packed into DoP v1.1 frames, handed to the DAC untouched — exclusive (hog) mode, forced device rate/format, no mixer, no SRC. Verified on a Topping DX5 II (DAC displays DSD64/128/256)
-- **DSD→PCM mode**: windowed-sinc low-pass + polyphase decimation (DSD64→88.2kHz, DSD128→176.4kHz, DSD256→352.8kHz). Works on any output device; system volume stays usable
+- **DSD→PCM mode**: windowed-sinc low-pass + polyphase decimation (DSD64→88.2kHz, DSD128→176.4kHz, DSD256→352.8kHz). Works on any output device; system volume stays usable. 1-bit FIR is computed via a precomputed lookup table (≈5× faster), and the anti-alias filter is a fixed 256-tap design — every output rate gets the same transition band, and the 352.8kHz stage's 44.1–88.2kHz noise floor sits at −161 dBFS
 - **PCM output rate boost**: click the rate badge in the signal chain to double or quadruple the PCM rate (up to 352.8kHz for DSD64, 1.411MHz for DSD256) — a wider anti-alias transition band means gentler filtering; switchable mid-playback without losing position
 - **Playlist**: drag-and-drop files *or whole folders* (recursive scan, natural track ordering), persistent across launches, collapsible to a compact deck; multi-select with ⌘/⇧, batch delete via Delete key or context menu, ↑/↓ keyboard navigation, **drag-to-reorder** (multi-select drag moves the whole group)
 - **Themed controls**: mode switch, device capsule, progress slider and selection highlight all follow the skin accent color, with hover/press feedback
@@ -32,6 +32,7 @@ A native macOS player for DSD audio files with **bit-perfect DoP output** to USB
 - **Play modes**: sequential, loop-all, repeat-one, shuffle; previous/next with smart restart
 - **Skins**: Dark, Braun Retro, Terminal Green — pick from the t-shirt menu; choice persists. The Default (Dark) skin's accent and background colors are customizable, with an adjustable background transparency (15%–100%)
 - **Album art**: embedded covers are read from DSF/DFF ID3v2 tags; if absent, common cover images in the song's folder (cover/front/folder/album/artwork) are used; click the artwork for a full-size preview
+- **Efficiency**: idle CPU ≈0.3%, paused ≈0.6%, playing ≈12% (long track titles scroll on hover only); covers are cached per-folder at 512px; album art extraction and the DSD→PCM converter are profiled by unit tests (full suite ~90s)
 - **System integration**: media keys, Lock Screen / Control Center now-playing, keyboard shortcuts
   - `Space` play/pause · `←`/`→` seek ±5s · `⌘←`/`⌘→` previous/next track
 
