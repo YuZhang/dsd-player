@@ -1102,6 +1102,7 @@ struct ContentView: View {
                 Button("") { model.seekBy(-5) }.keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { model.seekBy(5) }.keyboardShortcut(.rightArrow, modifiers: [])
                 Button("") { removeSelection() }.keyboardShortcut(.delete, modifiers: [])
+                Button("") { selectAll() }.keyboardShortcut("a", modifiers: .command)
                 Button("") { moveSelection(-1, extend: false) }.keyboardShortcut(.upArrow, modifiers: [])
                 Button("") { moveSelection(1, extend: false) }.keyboardShortcut(.downArrow, modifiers: [])
                 Button("") { moveSelection(-1, extend: true) }.keyboardShortcut(.upArrow, modifiers: .shift)
@@ -1576,7 +1577,7 @@ struct ContentView: View {
                                 active: model.showPlaylist,
                                 help: model.showPlaylist ? "Hide Playlist" : "Show Playlist",
                                 enabled: true) {
-                    withAnimation(Design.motionTheme) { model.showPlaylist.toggle() }
+                    model.showPlaylist.toggle()
                 }
             }
             .holeFreeZone()
@@ -1764,6 +1765,13 @@ struct ContentView: View {
     }
 
     /// 删除所有选中的曲目
+    /// ⌘A 全选播放列表
+    private func selectAll() {
+        guard !model.playlist.isEmpty else { return }
+        selection = Set(model.playlist.map { $0.id })
+        anchorIndex = 0
+    }
+
     private func removeSelection() {
         guard !selection.isEmpty else { return }
         let idxs = IndexSet(model.playlist.indices.filter { selection.contains(model.playlist[$0].id) })
@@ -2388,21 +2396,9 @@ struct VUMeter: View {
                 }
             }
 
-            // 面板刻度线：-40dB / -20dB 位置的 1.5px 细刻线（仪器面板感）
-            let tickColor: Color = theme.isDark ? Color.black.opacity(0.55) : Color.black.opacity(0.3)
-            func drawTicks(_ leftX: CGFloat, mirrored: Bool) {
-                for v in [1.0 / 3.0, 2.0 / 3.0] {
-                    let i = Int((mirrored ? (1 - v) : v) * Double(n))
-                    let x = leftX + CGFloat(i) * step - 0.75
-                    ctx.fill(Path(CGRect(x: x, y: 0, width: 1.5, height: size.height)),
-                             with: .color(tickColor))
-                }
-            }
-
             // 左声道（从中间向左增长）
             let leftX = (sideW - actualW) / 2
             drawSide(leftX: leftX, level: left, mirrored: true)
-            drawTicks(leftX, mirrored: true)
             // 中央指示灯
             let lampRect = CGRect(x: sideW + gap, y: (size.height - lampD) / 2,
                                   width: lampD, height: lampD)
@@ -2411,7 +2407,6 @@ struct VUMeter: View {
             // 右声道
             let rightX = size.width - actualW - (sideW - actualW) / 2
             drawSide(leftX: rightX, level: right, mirrored: false)
-            drawTicks(rightX, mirrored: false)
         }
         .frame(height: 13)
     }
