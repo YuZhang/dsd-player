@@ -347,9 +347,12 @@ final class PlayerModel: ObservableObject {
         // 切换中也保持刷新：进度显示乐观值（0），避免冻结在上首歌的位置
         guard state == .playing || state == .paused || switchingCount > 0 else { return }
         if switchingCount == 0 {
-            position = engine.positionSeconds
+            // 暂停时进度不变，值相同不赋值——@Published 每次赋值都会触发整窗重绘
+            let p = engine.positionSeconds
+            if p != position { position = p }
         }
-        updateNowPlaying()
+        // 系统 NowPlaying 只在播放中更新（暂停/停止保持最后写入的状态）
+        if state == .playing { updateNowPlaying() }
     }
 
     private func meterTick() {
