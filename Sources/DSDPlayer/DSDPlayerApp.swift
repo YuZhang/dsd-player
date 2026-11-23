@@ -18,6 +18,19 @@ struct SavedState: Codable, Equatable {
     let customBgOpacity: Double?   // 背景透明度 0...1，nil = 不透明
 }
 
+// MARK: - 高频播放状态（独立发布，限定界面失效范围）
+
+/// 播放进度：进度行独占订阅，播放中不再触发整窗重绘
+final class PlayheadState: ObservableObject {
+    @Published var position: Double = 0
+}
+
+/// VU 电平：电平表独占订阅
+final class MeterState: ObservableObject {
+    @Published var left: Double = 0
+    @Published var right: Double = 0
+}
+
 // MARK: - 播放模式
 
 enum PlayMode: Int, CaseIterable {
@@ -98,9 +111,27 @@ final class PlayerModel: ObservableObject {
         didSet { persist() }
     }
     @Published var state: PlaybackEngine.State = .idle
-    @Published var position: Double = 0
-    @Published var meterL = 0.0   // VU 表电平 0...1（快攻慢放平滑后）
-    @Published var meterR = 0.0
+    /// 播放进度状态（UI 专用发布对象：进度行独占订阅，播放中不触发整窗重绘）
+    let playhead = PlayheadState()
+    /// VU 电平状态（UI 专用发布对象：电平表独占订阅）
+    let meter = MeterState()
+    /// 播放位置（秒）：didSet 镜像到 playhead
+    var position: Double = 0 {
+        didSet {
+            if playhead.position != position { playhead.position = position }
+        }
+    }
+    /// VU 表电平 0...1（快攻慢放平滑后）：didSet 镜像到 meter
+    var meterL = 0.0 {
+        didSet {
+            if meter.left != meterL { meter.left = meterL }
+        }
+    }
+    var meterR = 0.0 {
+        didSet {
+            if meter.right != meterR { meter.right = meterR }
+        }
+    }
     @Published var statusMessage = ""
 
     let engine = PlaybackEngine()
@@ -279,6 +310,7 @@ final class PlayerModel: ObservableObject {
             guard let self else { return }
             // playAt 内部 load/stop 会派生 .stopped 事件，非播完路径无需处理
             self.state = s
+            self.updateNowPlaying()   // 播放/暂停/停止状态翻转时同步系统 NowPlaying
             if s == .finished { self.advanceAfterFinish() }
         }
         engine.onError = { [weak self] msg in self?.statusMessage = msg }
@@ -351,8 +383,6 @@ final class PlayerModel: ObservableObject {
             let p = engine.positionSeconds
             if p != position { position = p }
         }
-        // 系统 NowPlaying 只在播放中更新（暂停/停止保持最后写入的状态）
-        if state == .playing { updateNowPlaying() }
     }
 
     private func meterTick() {
@@ -829,6 +859,7 @@ final class PlayerModel: ObservableObject {
     func seek(to seconds: Double) {
         engineQueue.async { self.engine.seek(toSeconds: seconds) }
         position = seconds
+        updateNowPlaying()   // elapsed 跳变同步系统 NowPlaying
     }
 
     /// 键盘左右方向键：快进/快退 5 秒
@@ -1125,6 +1156,47 @@ struct ContentView: View {
         }
     }
 
+    /// 进度行：独占订阅 PlayheadState，位置更新不触发整窗重绘
+    private struct ProgressRow: View {
+        @ObservedObject var model: PlayerModel
+        @EnvironmentObject var playhead: PlayheadState
+        let theme: Theme
+        let timeFont: Font
+        var body: some View {
+            HStack(spacing: 10) {
+                Text(formatTime(playhead.position))
+                    .font(timeFont)   // Terminal 用液晶数字并放大
+                    .foregroundStyle(.secondary)
+                    .frame(height: 22)   // 所有皮肤统一时间标签高度
+                    .crtGlowText(theme)
+                ThemedSlider(
+                    value: Binding(
+                        get: { playhead.position },
+                        set: { model.position = $0 }),   // didSet 镜像回 playhead
+                    upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
+                    enabled: model.state != .idle,
+                    theme: theme,
+                    onEditingEnded: { model.seek(to: model.position) })
+                Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
+                    .font(timeFont)
+                    .foregroundStyle(.secondary)
+                    .frame(height: 22)
+                    .crtGlowText(theme)
+            }
+        }
+    }
+
+    /// VU 电平表：独占订阅 MeterState，电平更新不触发整窗重绘
+    private struct MeterView: View {
+        @ObservedObject var model: PlayerModel
+        @EnvironmentObject var meter: MeterState
+        let theme: Theme
+        var body: some View {
+            VUMeter(left: meter.left, right: meter.right, theme: theme,
+                    isPlaying: model.state == .playing)
+        }
+    }
+
     /// 封面缩略图：无封面时显示主题化占位图标（波形），不留空白
     private var coverArt: some View {
         Group {
@@ -1333,36 +1405,16 @@ struct ContentView: View {
                             .holeFreeZone()
                     }
 
-                    // 进度（位于封面右侧栏内，随封面加宽而缩短）
-                    HStack(spacing: 10) {
-                        Text(formatTime(model.position))
-                            .font(timeFont)   // Terminal 用液晶数字并放大
-                            .foregroundStyle(.secondary)
-                            .frame(height: 22)   // 所有皮肤统一时间标签高度
-                            .crtGlowText(theme)
-                        ThemedSlider(
-                            value: Binding(
-                                get: { model.position },
-                                set: { model.position = $0 }),
-                            upperBound: max(1, model.currentInfo?.durationSeconds ?? 1),
-                            enabled: model.state != .idle,
-                            theme: theme,
-                            onEditingEnded: { model.seek(to: model.position) })
-                        Text(formatTime(model.currentInfo?.durationSeconds ?? 0))
-                            .font(timeFont)
-                            .foregroundStyle(.secondary)
-                            .frame(height: 22)
-                            .crtGlowText(theme)
-                    }
-                    .holeFreeZone()
-                    .padding(.trailing, 20)   // 进度条进一步收窄
+                    // 进度（位于封面右侧栏内；独占订阅 playhead，位置更新不整窗重绘）
+                    ProgressRow(model: model, theme: theme, timeFont: timeFont)
+                        .holeFreeZone()
+                        .padding(.trailing, 20)   // 进度条进一步收窄
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            // VU 电平表（左声道 ← 指示灯 → 右声道，收窄）
-            VUMeter(left: model.meterL, right: model.meterR, theme: theme,
-                    isPlaying: model.state == .playing)
+            // VU 电平表（左声道 ← 指示灯 → 右声道；独占订阅 meter，电平更新不整窗重绘）
+            MeterView(model: model, theme: theme)
                 .padding(.top, 2)
                 .holeFreeZone()
                 .padding(.horizontal, 56)
@@ -2124,9 +2176,11 @@ struct MarqueeText: View {
     var scrolling = true        // 仅播放中滚动；暂停/停止时静止（30Hz 时间轴空耗 CPU）
 
     @State private var startDate = Date()
+    /// 文本宽度测量缓存（30Hz 滚动时不再重复字体测量）
+    @State private var measuredWidth: CGFloat = 0
 
     /// 用 NSFont 直接测量文本宽度（title3 字号的近似值，对滚动判定足够精确）
-    private var textWidth: CGFloat {
+    private func measureWidth() -> CGFloat {
         let size = NSFont.preferredFont(forTextStyle: .title3).pointSize
         let nsFont = NSFont.systemFont(ofSize: size, weight: .semibold)
         return (text as NSString).size(withAttributes: [.font: nsFont]).width
@@ -2134,7 +2188,7 @@ struct MarqueeText: View {
 
     var body: some View {
         GeometryReader { geo in
-            let overflow = textWidth - geo.size.width
+            let overflow = measuredWidth - geo.size.width
             if overflow > 0, scrolling {
                 // 时间轴驱动：左停 1.5s → 滚到底 → 停 1.5s → 滚回，循环
                 TimelineView(.periodic(from: .now, by: 1.0 / 30)) { context in
@@ -2150,7 +2204,11 @@ struct MarqueeText: View {
         }
         .frame(height: 26)
         .clipped()
-        .onChange(of: text) { startDate = Date() }
+        .onAppear { measuredWidth = measureWidth() }
+        .onChange(of: text) {
+            measuredWidth = measureWidth()
+            startDate = Date()
+        }
     }
 
     @ViewBuilder
@@ -2263,6 +2321,8 @@ struct DSDPlayerApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(model.playhead)   // 进度行独占订阅
+                .environmentObject(model.meter)      // VU 电平表独占订阅
         }
         .windowStyle(.hiddenTitleBar)   // 内容延伸到标题栏，面板浑然一体
         .windowResizability(.contentSize)
