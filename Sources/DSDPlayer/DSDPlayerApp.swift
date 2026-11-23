@@ -18,6 +18,21 @@ struct SavedState: Codable, Equatable {
     let customBgOpacity: Double?   // 背景透明度 0...1，nil = 不透明
 }
 
+// MARK: - 设计令牌（单一事实来源，详见 design.md）
+
+enum Design {
+    /// 字号阶梯：全应用只用这四档语义层级
+    enum Scale {
+        static let display: Font = .title3.weight(.semibold)   // 歌名
+        static let body: Font = .body                          // 正文/列表
+        static let caption: Font = .caption                    // 辅助信息
+        static let micro: Font = .caption2                     // 仪器微标签
+    }
+    /// 动效：标准交互 150ms；布局/主题级 250ms 弹簧
+    static let motionStandard = Animation.easeOut(duration: 0.15)
+    static let motionTheme = Animation.spring(response: 0.28, blendDuration: 0.1)
+}
+
 // MARK: - 高频播放状态（独立发布，限定界面失效范围）
 
 /// 播放进度：进度行独占订阅，播放中不再触发整窗重绘
@@ -685,6 +700,8 @@ final class PlayerModel: ObservableObject {
 
     // MARK: 封面
     @Published var coverImage: NSImage?
+    /// 封面主色的氛围光（由封面图像采样，铺在封面背后）
+    @Published var coverGlow: Color?
     private let coverCacheLock = NSLock()
     /// 封面缓存：按文件夹键（同专辑歌曲共享一张封面），值降采样到 512px；nil = 已知无封面
     nonisolated(unsafe) private var coverCache: [String: NSImage?] = [:]
@@ -733,13 +750,36 @@ final class PlayerModel: ObservableObject {
         return out
     }
 
+    /// 封面主色采样：四角与中心五点平均，供氛围光使用
+    nonisolated static func averageColor(of image: NSImage) -> Color? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              cg.width > 0, cg.height > 0 else { return nil }
+        var r = 0.0, g = 0.0, b = 0.0
+        let w = cg.width, h = cg.height
+        let points = [(w / 4, h / 4), (3 * w / 4, h / 4), (w / 4, 3 * h / 4), (3 * w / 4, 3 * h / 4), (w / 2, h / 2)]
+        for (px, py) in points {
+            var data = [UInt8](repeating: 0, count: 4)
+            guard let ctx = CGContext(data: &data, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { continue }
+            ctx.draw(cg, in: CGRect(x: -CGFloat(px), y: -CGFloat(py), width: CGFloat(w), height: CGFloat(h)))
+            r += Double(data[0]) / 255 / 5
+            g += Double(data[1]) / 255 / 5
+            b += Double(data[2]) / 255 / 5
+        }
+        return Color(red: r, green: g, blue: b)
+    }
+
     /// 切歌后刷新封面（缓存命中则同步显示）
     private func refreshCover() {
         guard let item = currentItem else {
             coverImage = nil
+            coverGlow = nil
             return
         }
-        coverImage = loadCover(for: item)
+        let image = loadCover(for: item)
+        coverImage = image
+        coverGlow = image.flatMap { Self.averageColor(of: $0) }
     }
 
     // MARK: 播放控制
@@ -1217,7 +1257,8 @@ struct ContentView: View {
         }
     }
 
-    /// 封面缩略图：无封面时显示主题化占位图标（波形），不留空白
+    /// 封面缩略图：无封面时按歌名生成首字母色块（色相稳定，同一专辑恒定）；
+    /// 有封面时背后铺封面主色的氛围光
     private var coverArt: some View {
         Group {
             if let img = model.coverImage {
@@ -1226,14 +1267,24 @@ struct ContentView: View {
                     .aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    theme.accent.opacity(0.12)
-                    Image(systemName: "waveform.path")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(theme.accent.opacity(0.85))
+                    Color(hue: coverHue, saturation: 0.32,
+                          brightness: theme.isDark ? 0.38 : 0.82)
+                    Text(coverInitial)
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.92))
                 }
             }
         }
         .frame(width: 78, height: 78)   // 与右栏三行（歌名+信息+进度）总高一致
+        .background {
+            if let glow = model.coverGlow {
+                RadialGradient(colors: [glow.opacity(0.4), .clear],
+                               center: .center, startRadius: 24, endRadius: 120)
+                .frame(width: 240, height: 240)
+                .blur(radius: 24)
+                .allowsHitTesting(false)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture {
@@ -1249,6 +1300,20 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.12), lineWidth: 1))
         .holeFreeZone()
+    }
+
+    /// 占位首字符：优先首个汉字，其次字母，最后数字，无则 D
+    private var coverInitial: String {
+        let t = model.currentItem?.title ?? ""
+        for ch in t where ("一"..."鿿").contains(ch) { return String(ch) }
+        for ch in t where ch.isLetter { return String(ch).uppercased() }
+        for ch in t where ch.isNumber { return String(ch) }
+        return "D"
+    }
+
+    /// 占位色相：按歌名哈希稳定取色，同一专辑恒定
+    private var coverHue: Double {
+        Double(abs((model.currentItem?.title ?? "").hashValue % 360)) / 360.0
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
@@ -1290,6 +1355,9 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .onHover { deviceHover = $0 }
                     .onPreferenceChange(DeviceAnchorKey.self) { deviceAnchor = $0 }
+                    .help(model.selectedDevice == nil
+                          ? "Connect a USB DAC — it will be detected automatically"
+                          : "Output device (click to change)")
                 }
                 .frame(width: 164, height: 28)   // 固定宽度：设备名变化不跳动
                 .background(
@@ -1313,7 +1381,7 @@ struct ContentView: View {
                 Menu {
                     ForEach(Skin.allCases) { skin in
                         Button {
-                            model.skin = skin
+                            withAnimation(Design.motionTheme) { model.skin = skin }
                         } label: {
                             if skin == model.skin {
                                 Label(skin.name, systemImage: "checkmark")
@@ -1408,10 +1476,17 @@ struct ContentView: View {
                                 .fixedSize()
                                 .help("PCM output sample rate (click to change)")
                             }
-                            // Bit-Perfect 标识：DoP 位元直通播放时点亮（所有皮肤显示，保证布局一致）
-                            HStack(spacing: 3) {
-                                Circle().fill(theme.accent).frame(width: 4, height: 4)
-                                Text("Bit-Perfect")
+                            // Bit-Perfect 标识：仪器微标签 + 呼吸灯（DoP 播放时以 1.6s 周期呼吸）
+                            HStack(spacing: 4) {
+                                TimelineView(.periodic(from: .now, by: 1.0 / 20)) { context in
+                                    let t = context.date.timeIntervalSince1970
+                                    let pulse = 0.5 + 0.5 * sin(2 * .pi * t / 1.6)
+                                    Circle().fill(theme.accent).frame(width: 4, height: 4)
+                                        .opacity(0.45 + 0.55 * pulse)
+                                }
+                                Text("BIT-PERFECT")
+                                    .font(.caption2.weight(.semibold))
+                                    .tracking(1.2)
                             }
                             .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
                             .foregroundStyle(theme.accent)
@@ -1501,7 +1576,7 @@ struct ContentView: View {
                                 active: model.showPlaylist,
                                 help: model.showPlaylist ? "Hide Playlist" : "Show Playlist",
                                 enabled: true) {
-                    model.showPlaylist.toggle()
+                    withAnimation(Design.motionTheme) { model.showPlaylist.toggle() }
                 }
             }
             .holeFreeZone()
@@ -1530,10 +1605,19 @@ struct ContentView: View {
             .padding(.horizontal, 16).padding(.vertical, 8)
 
             if model.playlist.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 30))
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 10) {
+                    // 动态波形：空列表时的生命感（仅空列表时运行）
+                    TimelineView(.periodic(from: .now, by: 1.0 / 20)) { context in
+                        let t = context.date.timeIntervalSince1970
+                        HStack(spacing: 4) {
+                            ForEach(0..<5, id: \.self) { i in
+                                Capsule()
+                                    .fill(theme.accent.opacity(0.75))
+                                    .frame(width: 3.5,
+                                           height: 7 + 11 * abs(sin(t * 2.2 + Double(i) * 0.65)))
+                            }
+                        }
+                    }
                     Text("Drop files or folders here, or click Add Files")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -2304,15 +2388,30 @@ struct VUMeter: View {
                 }
             }
 
+            // 面板刻度线：-40dB / -20dB 位置的 1.5px 细刻线（仪器面板感）
+            let tickColor: Color = theme.isDark ? Color.black.opacity(0.55) : Color.black.opacity(0.3)
+            func drawTicks(_ leftX: CGFloat, mirrored: Bool) {
+                for v in [1.0 / 3.0, 2.0 / 3.0] {
+                    let i = Int((mirrored ? (1 - v) : v) * Double(n))
+                    let x = leftX + CGFloat(i) * step - 0.75
+                    ctx.fill(Path(CGRect(x: x, y: 0, width: 1.5, height: size.height)),
+                             with: .color(tickColor))
+                }
+            }
+
             // 左声道（从中间向左增长）
-            drawSide(leftX: (sideW - actualW) / 2, level: left, mirrored: true)
+            let leftX = (sideW - actualW) / 2
+            drawSide(leftX: leftX, level: left, mirrored: true)
+            drawTicks(leftX, mirrored: true)
             // 中央指示灯
             let lampRect = CGRect(x: sideW + gap, y: (size.height - lampD) / 2,
                                   width: lampD, height: lampD)
             ctx.fill(Path(ellipseIn: lampRect),
                      with: .color(isPlaying ? theme.accent : theme.badgeBg))
             // 右声道
-            drawSide(leftX: size.width - actualW - (sideW - actualW) / 2, level: right, mirrored: false)
+            let rightX = size.width - actualW - (sideW - actualW) / 2
+            drawSide(leftX: rightX, level: right, mirrored: false)
+            drawTicks(rightX, mirrored: false)
         }
         .frame(height: 13)
     }
