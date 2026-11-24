@@ -506,15 +506,24 @@ extension DSDPlayerTests {
     /// 与转换器完全相同的滤波器设计（taps 是 private，这里复制构造逻辑）
     private func lutTaps(dsdRate: UInt32, pcmRate: Int) -> [Float] {
         let decimation = Int(dsdRate) / pcmRate
-        let M = 256
+        let windowBits = Int(90e-6 * Double(dsdRate))
+        let M = max(256, windowBits - windowBits % decimation)
         let fc = min(24_000.0, Double(pcmRate) * 0.45) / Double(dsdRate)
         var h = [Float](repeating: 0, count: M + 1)
         var sum: Float = 0
+        let beta: Float = 12.0
+        func besselI0(_ x: Float) -> Float {
+            var s: Float = 1, t: Float = 1
+            let xx = x * x / 4
+            for k in 1...24 { t *= xx / Float(k * k); s += t; if t < 1e-9 * s { break } }
+            return s
+        }
+        let denom = besselI0(beta)
         for n in 0...M {
             let k = Float(n) - Float(M) / 2
             let sinc = k == 0 ? Float(2 * fc) : sin(Float.pi * 2 * Float(fc) * k) / (Float.pi * k)
-            let w = Float(0.42 - 0.5 * cos(2 * Double.pi * Double(n) / Double(M))
-                          + 0.08 * cos(4 * Double.pi * Double(n) / Double(M)))
+            let r = 2.0 * Double(n) / Double(M) - 1.0
+            let w = besselI0(beta * sqrt(1 - Float(r * r))) / denom
             h[n] = sinc * w
             sum += h[n]
         }

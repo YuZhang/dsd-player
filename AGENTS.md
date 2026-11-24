@@ -78,6 +78,13 @@ GitHub Release 注意：本机直连 api.github.com 会超时，`gh` 命令需�
 4. 三个皮肤都要过一遍（Default / Braun Retro / Terminal Green 共用令牌，
    但浅色/暗色行为不同）
 
+已知音频格式坑（改前自查）：
+- **DSF 字节内位序是 LSB-first**（DFF 是 MSB-first）：`DSFFile.read` 用 bitReverseLUT
+  逐字节反转。手工生成 DSF 时第 1 个采样必须放 bit0，否则播放全是噪声（2026-11-24 踩过）
+- DSF 块布局为 [L0 R0 L1 R1…] 声道交替，不是 [全部 L… 全部 R…]
+- DSD→PCM 抽取混叠：输出采样率越低混叠越重（DSD256→88.2k 时超声整形噪声折回带内，
+  需 Kaiser β=12 高阻带窗 + ≥90µs 滤波窗口压制）；滤波器设计见 PCMConverter.swift
+
 已知 UI 坑（改前自查）：
 - SwiftUI `Menu` + `.borderlessButton` 会忽略 label 的 frame 并把内容居中——
   设备选择控件因此改用了普通 Button + 手动 NSMenu（`showDeviceMenu`），别改回去

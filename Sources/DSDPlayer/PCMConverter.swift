@@ -1,5 +1,18 @@
 import Foundation
 
+/// 零阶修正第一类贝塞尔函数 I0（Kaiser 窗用），x ≤ 20 精度足够
+private func _besselI0(_ x: Float) -> Float {
+    var sum: Float = 1
+    var term: Float = 1
+    let xx = x * x / 4
+    for k in 1...24 {
+        term *= xx / Float(k * k)
+        sum += term
+        if term < 1e-9 * sum { break }
+    }
+    return sum
+}
+
 /// DSD→PCM 转换器：MSB-first DSD 字节流 → 加窗 sinc 低通 → 多相抽取 → Int32 PCM。
 /// 抽取率 = DSD率/PCM率（如 DSD64→88.2k 为 32）。
 ///
@@ -30,17 +43,25 @@ final class DSDToPCM {
         // 滤波器阶数固定 256：所有抽取档覆盖 L = 256/decimation 个抽取组。
         // LUT 下每字节成本与 L 成正比（约 2L/dec·8 + L），固定 256 阶后高档位
         // （如 352.8k 档 L=32）获得更陡的截止与更深的阻带，代价可控
-        let M = 256
+        // 滤波器时间窗 ≥90µs：保证任何抽取比下 24kHz→奈奎斯特 的过渡带可完成，
+        // 避免高抽取档（如 DSD256→88.2k，抽取 128）因阶数不足导致超声噪声混叠进音频带。
+        // LUT 大小恒定 ≈ 96KB（slots·256·L·4B，M = L·decimation）
+        let windowBits = Int(90e-6 * Double(dsdRate))
+        let M = max(256, windowBits - windowBits % decimation)
         let fc = min(24_000.0, Double(pcmRate) * 0.45) / Double(dsdRate)
         var h = [Float](repeating: 0, count: M + 1)
         var sum: Float = 0
+        // Kaiser 窗（β=12，阻带 ≈ -85dB）：抽取混叠的抑制由阻带衰减决定，
+        // Blackman 窗仅 -60dB，高抽取档（DSD256→88.2k）的超声整形噪声
+        // 经混叠回音频带可闻；Kaiser β=12 把它压到 -73dB 以下
+        let beta: Float = 12.0
+        let denom = _besselI0(beta)
         for n in 0...M {
             let k = Float(n) - Float(M) / 2
             let sinc = k == 0 ? Float(2 * fc)
                               : sin(Float.pi * 2 * Float(fc) * k) / (Float.pi * k)
-            // Blackman 窗
-            let w = Float(0.42 - 0.5 * cos(2 * Double.pi * Double(n) / Double(M))
-                                + 0.08 * cos(4 * Double.pi * Double(n) / Double(M)))
+            let r = 2.0 * Double(n) / Double(M) - 1.0      // [-1, 1]
+            let w = _besselI0(beta * sqrt(1 - Float(r * r))) / denom
             h[n] = sinc * w
             sum += h[n]
         }
