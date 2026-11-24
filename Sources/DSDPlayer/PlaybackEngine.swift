@@ -8,6 +8,24 @@ enum OutputMode: Int {
     case pcm   // DSD→PCM 转换（任意设备可用，系统音量可调）
 }
 
+/// 统一播放源：DSD 字节流（DSF/DFF/ISO 曲目）或 PCM 采样流（WAV/FLAC）
+enum AudioSource {
+    case dsd(DSDSource)
+    case pcm(PCMSource)
+
+    var info: DSDInfo {
+        switch self {
+        case .dsd(let s): return s.info
+        case .pcm(let s): return s.info
+        }
+    }
+    /// 无缝续播/切换的规格比较键：采样率 + 声道数 + 源种类
+    var seamlessKey: (rate: UInt32, channels: Int, pcm: Bool) {
+        let i = info
+        return (i.dsdSampleRate, i.channelCount, i.isPCM)
+    }
+}
+
 /// 播放引擎：DSD 文件 → DoP 帧 / PCM 采样 → 环形缓冲 → AUHAL 直出。
 /// 渲染回调运行在 CoreAudio 实时线程，只读环形缓冲，不加锁。
 final class PlaybackEngine: @unchecked Sendable {
@@ -20,10 +38,15 @@ final class PlaybackEngine: @unchecked Sendable {
         case finished    // 播完
     }
 
-    private(set) var source: DSDSource?
+    private(set) var source: AudioSource?
     var outputMode: OutputMode = .dop
     /// PCM 输出采样率提升档：0 = DSD率/32（88.2k@DSD64），1 = ×2，2 = ×4
     var pcmRateBoost = 0
+
+    /// 实际生效的输出模式：PCM 源（WAV/FLAC）只能走 PCM 通路，DoP 开关对它们无效
+    private var effectiveMode: OutputMode {
+        (source?.info.isPCM ?? false) ? .pcm : outputMode
+    }
 
     /// PCM 输出采样率 = DSD率/32 × 2^boost
     private func pcmRate(for info: DSDInfo) -> Int {
@@ -59,8 +82,8 @@ final class PlaybackEngine: @unchecked Sendable {
     private let feederLock = NSLock()
 
     // MARK: 无缝播放与防爆音
-    /// 预排的下一首（仅当采样率/声道数与当前相同时保留，实现无缝续播）
-    private var pendingNext: DSDSource?
+    /// 预排的下一首（仅当采样率/声道数/源种类与当前相同时保留，实现无缝续播）
+    private var pendingNext: AudioSource?
     /// 无缝切换通知（主线程派发）
     var onTrackAdvanced: (() -> Void)?
     private let trackStartFrames = Atomic<Int>(0)      // 当前曲目起点（渲染帧坐标）
@@ -72,31 +95,46 @@ final class PlaybackEngine: @unchecked Sendable {
     let levelL = Atomic<Int>(0)  // VU 电平 0...1000（喂数据线程写入，UI 读取）
     let levelR = Atomic<Int>(0)
 
-    /// 当前输出采样率（DoP 载波或 PCM 率）
-    private func outputRate(for src: DSDSource) -> Int {
-        outputMode == .dop ? Int(src.info.dsdSampleRate) / 16 : pcmRate(for: src.info)
+    /// 当前输出采样率：DSD 源为 DoP 载波或转换后 PCM 率；PCM 源为文件原生率
+    private func outputRate(for src: AudioSource) -> Int {
+        switch src {
+        case .pcm: return Int(src.info.dsdSampleRate)
+        case .dsd: return outputMode == .dop ? Int(src.info.dsdSampleRate) / 16 : pcmRate(for: src.info)
+        }
     }
 
     // MARK: 加载
 
     func load(url: URL) throws {
-        try load(source: DSDFile.open(url))
+        if PCMFile.isSupported(url) {
+            try load(source: AudioSource.pcm(PCMFile.open(url)))
+        } else {
+            try load(source: DSDFile.open(url))
+        }
     }
 
+    /// 兼容入口：直接加载 DSD 源（旧调用方/测试）
     func load(source src: DSDSource) throws {
+        try load(source: AudioSource.dsd(src))
+    }
+
+    func load(source src: AudioSource) throws {
         stop()
         feederLock.lock()
         source = src
+        let info = src.info
         carrierRate.store(outputRate(for: src), ordering: .relaxed)
         let carrier = outputRate(for: src)
-        totalFrames.store(Int(src.info.durationSeconds * Double(carrier)), ordering: .relaxed)
-        modeIsPCM.store(outputMode == .pcm, ordering: .relaxed)
-        pcmConverter = outputMode == .pcm
-            ? DSDToPCM(dsdRate: src.info.dsdSampleRate,
-                       pcmRate: pcmRate(for: src.info),
-                       channels: src.info.channelCount)
-            : nil
-        channels.store(src.info.channelCount, ordering: .relaxed)
+        totalFrames.store(Int(info.durationSeconds * Double(carrier)), ordering: .relaxed)
+        let pcm = effectiveMode == .pcm
+        modeIsPCM.store(pcm, ordering: .relaxed)
+        pcmConverter = nil
+        if case .dsd = src, pcm {
+            pcmConverter = DSDToPCM(dsdRate: info.dsdSampleRate,
+                                    pcmRate: pcmRate(for: info),
+                                    channels: info.channelCount)
+        }
+        channels.store(info.channelCount, ordering: .relaxed)
         feederOffset.store(0, ordering: .relaxed)
         renderedFrames.store(0, ordering: .relaxed)
         trackStartFrames.store(0, ordering: .relaxed)
@@ -113,9 +151,10 @@ final class PlaybackEngine: @unchecked Sendable {
 
     func play(device: AudioDeviceID) throws {
         guard let src = source else { return }
+        let eff = effectiveMode
         if state == .paused {
             // 恢复播放：重新独占并配置设备（暂停期间其他应用可能改过格式）
-            if outputMode == .dop {
+            if eff == .dop {
                 let carrier = Double(outputRate(for: src))
                 AudioDeviceManager.acquireHogMode(device)
                 try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
@@ -129,7 +168,7 @@ final class PlaybackEngine: @unchecked Sendable {
         if state == .playing { return }
 
         let carrier = Double(outputRate(for: src))
-        if outputMode == .dop {
+        if eff == .dop {
             // DoP 位元直通：独占设备并强制匹配格式
             AudioDeviceManager.acquireHogMode(device)
             try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
@@ -148,7 +187,7 @@ final class PlaybackEngine: @unchecked Sendable {
         encoder.reset()
         silencePhase.store(0, ordering: .relaxed)
         // 开播防爆音：DoP 先送 10ms 静音（同时让 DAC 提前锁定标记），PCM 做 10ms 渐入
-        if outputMode == .dop {
+        if eff == .dop {
             pendingSilenceFrames.store(Int(carrier / 100), ordering: .relaxed)
         } else {
             fadeInSamples.store(Int(carrier / 100) * src.info.channelCount, ordering: .relaxed)
@@ -183,19 +222,25 @@ final class PlaybackEngine: @unchecked Sendable {
         guard let src = source, state == .playing || state == .paused else { return }
         let carrier = Double(carrierRate.load(ordering: .relaxed))
         let frame = max(0, min(Int64(seconds * carrier), Int64(totalFrames.load(ordering: .relaxed))))
-        // 读位置按 DSD 字节计算，与输出模式无关
-        let byteOffset = UInt64(max(0, seconds)) * UInt64(src.info.dsdSampleRate) / 8
+        // 读位置语义随源种类：DSD 为每声道字节偏移，PCM 为帧偏移
+        let byteOffset: UInt64
+        if src.info.isPCM {
+            byteOffset = UInt64(max(0, seconds)) * UInt64(src.info.dsdSampleRate)
+        } else {
+            byteOffset = UInt64(max(0, seconds)) * UInt64(src.info.dsdSampleRate) / 8
+        }
 
         feederLock.lock()
         let wasPlaying = state == .playing
         if wasPlaying, let au = audioUnit { AudioOutputUnitStop(au) }
         ring.clear()
         encoder.reset()
-        pcmConverter = outputMode == .pcm
-            ? DSDToPCM(dsdRate: src.info.dsdSampleRate,
-                       pcmRate: pcmRate(for: src.info),
-                       channels: src.info.channelCount)
-            : nil
+        pcmConverter = nil
+        if case .dsd(let dsd) = src, effectiveMode == .pcm {
+            pcmConverter = DSDToPCM(dsdRate: dsd.info.dsdSampleRate,
+                                    pcmRate: pcmRate(for: dsd.info),
+                                    channels: dsd.info.channelCount)
+        }
         feederOffset.store(byteOffset, ordering: .relaxed)
         eofReached.store(false, ordering: .relaxed)
         // 保持渲染帧坐标单调：只平移曲目起点，使位置 = frame/carrier
@@ -204,7 +249,7 @@ final class PlaybackEngine: @unchecked Sendable {
         pendingBoundary.store(-1, ordering: .relaxed)
         silencePhase.store(0, ordering: .relaxed)
         // seek 边界防爆音
-        if outputMode == .dop {
+        if effectiveMode == .dop {
             pendingSilenceFrames.store(Int(carrier / 100), ordering: .relaxed)
         } else {
             fadeInSamples.store(Int(carrier / 100) * src.info.channelCount, ordering: .relaxed)
@@ -243,12 +288,11 @@ final class PlaybackEngine: @unchecked Sendable {
 
     // MARK: 无缝切歌
 
-    /// 预排下一首；规格（采样率/声道）与当前不同则不保留，播完时走完整重开链路
-    func setNext(_ src: DSDSource?) {
+    /// 预排下一首；规格（采样率/声道/源种类）与当前不同则不保留，播完时走完整重开链路
+    func setNext(_ src: AudioSource?) {
         feederLock.lock()
         if let src, let cur = source,
-           src.info.dsdSampleRate == cur.info.dsdSampleRate,
-           src.info.channelCount == cur.info.channelCount {
+           src.seamlessKey == cur.seamlessKey {
             pendingNext = src
             // 喂数据线程可能已在 EOF 等待（短曲目整个进了缓冲区）——唤醒它走无缝续播
             eofReached.store(false, ordering: .relaxed)
@@ -258,12 +302,16 @@ final class PlaybackEngine: @unchecked Sendable {
         feederLock.unlock()
     }
 
+    /// 兼容入口：直接预排 DSD 源
+    func setNext(_ src: DSDSource?) {
+        setNext(src.map { AudioSource.dsd($0) })
+    }
+
     /// 无缝切换到同规格曲目（播放/暂停中有效）；规格不符返回 false，调用方走完整重开
-    func switchTrack(_ src: DSDSource) -> Bool {
+    func switchTrack(_ src: AudioSource) -> Bool {
         guard state == .playing || state == .paused,
               let cur = source,
-              src.info.dsdSampleRate == cur.info.dsdSampleRate,
-              src.info.channelCount == cur.info.channelCount else { return false }
+              src.seamlessKey == cur.seamlessKey else { return false }
         let carrier = Double(carrierRate.load(ordering: .relaxed))
         feederLock.lock()
         source = src
@@ -275,13 +323,19 @@ final class PlaybackEngine: @unchecked Sendable {
         // 新曲目从当前渲染位置起算（ring 已清空）
         trackStartFrames.store(renderedFrames.load(ordering: .relaxed), ordering: .relaxed)
         pendingBoundary.store(-1, ordering: .relaxed)
-        if outputMode == .dop {
+        if effectiveMode == .dop {
             pendingSilenceFrames.store(Int(carrier / 100), ordering: .relaxed)
         } else {
             fadeInSamples.store(Int(carrier / 100) * src.info.channelCount, ordering: .relaxed)
         }
         feederLock.unlock()
         return true
+    }
+
+    /// 兼容入口：直接切换 DSD 源
+    @discardableResult
+    func switchTrack(_ src: DSDSource) -> Bool {
+        switchTrack(AudioSource.dsd(src))
     }
 
     // MARK: AUHAL
@@ -439,8 +493,40 @@ final class PlaybackEngine: @unchecked Sendable {
 
             do {
                 let off = feederOffset.load(ordering: .relaxed)
-                let dsd = try src.read(channelByteOffset: off, perChannelByteCount: chunkFrames * 2)
-                guard !dsd.isEmpty else {
+                // 边界渐入（PCM 防爆音），DSD→PCM 转换与 PCM 直出共用
+                func applyFade(_ s: inout [Int32]) {
+                    let fade = fadeInSamples.load(ordering: .relaxed)
+                    guard fade > 0, !s.isEmpty else { return }
+                    let n = min(fade, s.count)
+                    for i in 0..<n {
+                        s[i] = Int32(Int64(s[i]) * Int64(i) / Int64(n))
+                    }
+                    _ = fadeInSamples.add(-n, ordering: .relaxed)
+                }
+                // 按源种类读取：DSD 读字节后编码/转换，PCM 直接读采样；units = 进度步长
+                var samples = [Int32]()
+                var units: UInt64 = 0
+                switch src {
+                case .dsd(let dsd):
+                    let dsdBytes = try dsd.read(channelByteOffset: off, perChannelByteCount: chunkFrames * 2)
+                    if !dsdBytes.isEmpty {
+                        units = UInt64(dsdBytes.count / ch)
+                        if let conv = pcmConverter {
+                            samples = conv.process(dsdBytes, channels: ch)
+                        } else {
+                            samples = encoder.encode(dsdBytes, channels: ch)
+                        }
+                        applyFade(&samples)
+                    }
+                case .pcm(let pcm):
+                    let frames = try pcm.read(frameOffset: off, frameCount: chunkFrames)
+                    if !frames.isEmpty {
+                        units = UInt64(frames.count / ch)
+                        samples = frames
+                        applyFade(&samples)
+                    }
+                }
+                guard units > 0 else {
                     // 无缝续播：有预排的下一首（规格已由 setNext 保证一致）
                     if let next = pendingNext {
                         pendingNext = nil
@@ -448,7 +534,7 @@ final class PlaybackEngine: @unchecked Sendable {
                         feederOffset.store(0, ordering: .relaxed)
                         let carrier = carrierRate.load(ordering: .relaxed)
                         let gap = carrier / 200   // 5ms 边界静音
-                        if outputMode == .dop {
+                        if effectiveMode == .dop {
                             pendingSilenceFrames.store(gap, ordering: .relaxed)
                         } else {
                             fadeInSamples.store(gap * ch, ordering: .relaxed)
@@ -456,7 +542,7 @@ final class PlaybackEngine: @unchecked Sendable {
                         // 边界先挂起，渲染真正越过该帧时才生效并通知（保证 UI 与听觉同步）
                         let boundary = renderedFrames.load(ordering: .relaxed)
                             + ring.availableToRead / ch
-                            + (outputMode == .dop ? gap : 0)
+                            + (effectiveMode == .dop ? gap : 0)
                         pendingTrackFrames.store(Int(next.info.durationSeconds * Double(carrier)),
                                                  ordering: .relaxed)
                         pendingBoundary.store(boundary, ordering: .relaxed)
@@ -476,22 +562,7 @@ final class PlaybackEngine: @unchecked Sendable {
                     state = .finished
                     return
                 }
-                feederOffset.store(off + UInt64(dsd.count / ch), ordering: .relaxed)
-                var samples: [Int32]
-                if let conv = pcmConverter {
-                    samples = conv.process(dsd, channels: ch)
-                    // 边界渐入（PCM 防爆音）
-                    let fade = fadeInSamples.load(ordering: .relaxed)
-                    if fade > 0, !samples.isEmpty {
-                        let n = min(fade, samples.count)
-                        for i in 0..<n {
-                            samples[i] = Int32(Int64(samples[i]) * Int64(i) / Int64(n))
-                        }
-                        _ = fadeInSamples.add(-n, ordering: .relaxed)
-                    }
-                } else {
-                    samples = encoder.encode(dsd, channels: ch)
-                }
+                feederOffset.store(off + units, ordering: .relaxed)
                 _ = ring.write(samples)
                 feederLock.unlock()
             } catch {

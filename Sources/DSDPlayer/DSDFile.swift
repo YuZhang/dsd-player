@@ -21,14 +21,24 @@ enum DSDError: Error, LocalizedError {
 }
 
 struct DSDInfo: Hashable {
-    let formatName: String              // "DSF" / "DFF"
-    let dsdSampleRate: UInt32           // 2822400 / 5644800 / 11289600 ...
+    let formatName: String              // "DSF" / "DFF" / "SACD" / "WAV" / "FLAC"
+    let dsdSampleRate: UInt32           // DSD: 2822400 ...；PCM: 原生采样率（44100/96000 ...）
     let channelCount: Int
-    let totalSamplesPerChannel: UInt64  // 单位: bit
+    let totalSamplesPerChannel: UInt64  // DSD: 单位 bit；PCM: 单位 frame（durationSeconds 公式不变）
+    var isPCM: Bool = false             // PCM 源（WAV/FLAC）：只能走 PCM 输出，无 DoP
+    var bitDepth: Int = 0               // PCM 位深（16/24/32），DSD 源为 0
 
     var durationSeconds: Double { Double(totalSamplesPerChannel) / Double(dsdSampleRate) }
     var dopCarrierRate: Double { Double(dsdSampleRate) / 16.0 }
     var dsdMultiple: Int { Int(dsdSampleRate / 44100) }
+
+    /// 播放列表徽标文本：DSD 显示倍数（DSD64），PCM 显示格式名（WAV/FLAC）
+    var badgeText: String { isPCM ? formatName : "DSD\(dsdMultiple)" }
+    /// PCM 源显示用的采样率文本，如 "44.1kHz" / "96kHz"
+    var pcmRateText: String {
+        let k = Double(dsdSampleRate) / 1000
+        return k.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(k))kHz" : String(format: "%.1fkHz", k)
+    }
 }
 
 /// 统一的 DSD 数据源。read 返回按 [ch0b0, ch1b0, ch0b1, ch1b1, ...] 交错、
@@ -60,6 +70,9 @@ let bitReverseLUT: [UInt8] = (0...255).map { v -> UInt8 in
 }
 
 extension Data {
+    func u16le(_ off: Int) -> UInt16 {
+        UInt16(self[off]) | UInt16(self[off + 1]) << 8
+    }
     func u32le(_ off: Int) -> UInt32 {
         UInt32(self[off]) | UInt32(self[off + 1]) << 8 | UInt32(self[off + 2]) << 16 | UInt32(self[off + 3]) << 24
     }
@@ -290,9 +303,52 @@ enum CoverArt {
                 if let d = extractFromDSF(fh: fh, url: url) { return d }
             } else if ext == "dff" {
                 if let d = extractFromDFF(fh: fh, url: url) { return d }
+            } else if ext == "flac" {
+                if let d = extractFromFLAC(fh: fh, url: url) { return d }
             }
         }
         return extractFromFolder(url.deletingLastPathComponent())
+    }
+
+    /// FLAC：遍历元数据块找 PICTURE 块（type 6），取图片数据负载
+    private static func extractFromFLAC(fh: FileHandle, url: URL) -> Data? {
+        let fileSize = (try? fh.seekToEnd()) ?? 0
+        guard fileSize > 8 else { return nil }
+        var offset: UInt64 = 4   // 跳过 "fLaC"
+        var isLast = false
+        while !isLast, offset + 4 <= fileSize {
+            guard let hdr = try? fh.readAt(offset, count: 4), hdr.count == 4 else { return nil }
+            isLast = (hdr[0] & 0x80) != 0
+            let type = hdr[0] & 0x7F
+            let size = UInt64(hdr[1]) << 16 | UInt64(hdr[2]) << 8 | UInt64(hdr[3])
+            guard offset + 4 + size <= fileSize else { return nil }
+            if type == 6, size > 32,   // PICTURE
+               let body = try? fh.readAt(offset + 4, count: Int(size)),
+               body.count == size {
+                return parseFlacPicture(Data(body))
+            }
+            offset += 4 + size
+        }
+        return nil
+    }
+
+    /// PICTURE 负载：type(4) + mimeLen(4) + mime + descLen(4) + desc + w(4) + h(4) + depth(4) + colors(4) + dataLen(4) + data
+    static func parseFlacPicture(_ d: Data) -> Data? {
+        let b = [UInt8](d)
+        var i = 4
+        func u32() -> UInt32? {
+            guard i + 4 <= b.count else { return nil }
+            let v = Data(b).u32be(i)
+            i += 4
+            return v
+        }
+        guard let mimeLen = u32(), i + Int(mimeLen) <= b.count else { return nil }   // i=4 已跳过 type
+        i += Int(mimeLen)
+        guard let descLen = u32(), i + Int(descLen) <= b.count else { return nil }
+        i += Int(descLen)
+        guard let _ = u32(), let _ = u32(), let _ = u32(), let _ = u32() else { return nil }  // w/h/depth/colors
+        guard let dataLen = u32(), dataLen > 0, i + Int(dataLen) <= b.count else { return nil }
+        return Data(b[i..<(i + Int(dataLen))])
     }
 
     /// 歌曲所在文件夹的封面图片：常见命名（不区分大小写）

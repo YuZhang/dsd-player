@@ -217,20 +217,23 @@ final class PlayerModel: ObservableObject {
         return t
     }
 
-    /// 打开列表项对应的数据源：普通文件走 DSDFile，ISO 曲目走 SacdTrackSource。
+    /// 打开列表项对应的数据源：普通文件按扩展名走 DSD/PCM 解析，ISO 曲目走 SacdTrackSource。
     /// nonisolated：可能被引擎队列调用，内部已用锁保护缓存
-    nonisolated func openSource(for item: PlaylistItem) throws -> DSDSource {
+    nonisolated func openSource(for item: PlaylistItem) throws -> AudioSource {
         if let trackIdx = item.isoTrackIndex {
             let path = item.url.path
             let key = path as NSString
             if let cached = isoCache.object(forKey: key) {
-                return try cached.makeTrackSource(cached.album.tracks[trackIdx])
+                return .dsd(try cached.makeTrackSource(cached.album.tracks[trackIdx]))
             }
             let iso = try SacdISO(url: item.url)
             isoCache.setObject(iso, forKey: key)
-            return try iso.makeTrackSource(iso.album.tracks[trackIdx])
+            return .dsd(try iso.makeTrackSource(iso.album.tracks[trackIdx]))
         }
-        return try DSDFile.open(item.url)
+        if PCMFile.isSupported(item.url) {
+            return .pcm(try PCMFile.open(item.url))
+        }
+        return .dsd(try DSDFile.open(item.url))
     }
 
     // MARK: 持久化
@@ -294,9 +297,14 @@ final class PlayerModel: ObservableObject {
                 continue
             }
             let url = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: path),
-                  let src = try? DSDFile.open(url) else { missing += 1; continue }
-            items.append(PlaylistItem(url: url, info: src.info))
+            guard FileManager.default.fileExists(atPath: path) else { missing += 1; continue }
+            let info: DSDInfo
+            if PCMFile.isSupported(url), let src = try? PCMFile.open(url) {
+                info = src.info
+            } else if let src = try? DSDFile.open(url) {
+                info = src.info
+            } else { missing += 1; continue }
+            items.append(PlaylistItem(url: url, info: info))
         }
         playlist = items
         if missing > 0 {
@@ -422,7 +430,7 @@ final class PlayerModel: ObservableObject {
     private func queueNextForGapless() {
         guard let idx = currentIndex, !playlist.isEmpty else {
             queuedNextIndex = nil
-            engineQueue.async { self.engine.setNext(nil) }
+            engineQueue.async { self.engine.setNext(nil as AudioSource?) }
             return
         }
         let nextIdx: Int?
@@ -434,7 +442,7 @@ final class PlayerModel: ObservableObject {
         }
         queuedNextIndex = nextIdx
         guard let ni = nextIdx else {
-            engineQueue.async { self.engine.setNext(nil) }
+            engineQueue.async { self.engine.setNext(nil as AudioSource?) }
             return
         }
         let item = playlist[ni]
@@ -493,7 +501,7 @@ final class PlayerModel: ObservableObject {
         guard let dev = selectedDevice, let info = currentInfo else { return true }
         // PCM 模式不独占设备：CoreAudio 会自动重采样到设备原生率，任意 PCM 率均可播放；
         // 只有 DoP 位元直通要求设备严格支持载波率
-        guard outputMode == .dop else { return true }
+        guard outputMode == .dop, !info.isPCM else { return true }
         return dev.supports(rate: info.dopCarrierRate)
     }
 
@@ -516,8 +524,12 @@ final class PlayerModel: ObservableObject {
     }
 
     func activeOutputRate(for info: DSDInfo) -> Double {
-        outputMode == .dop ? info.dopCarrierRate : pcmOutputRate(for: info)
+        if info.isPCM { return Double(info.dsdSampleRate) }
+        return outputMode == .dop ? info.dopCarrierRate : pcmOutputRate(for: info)
     }
+
+    /// 当前曲目是否为 PCM 源（WAV/FLAC）：禁用 DoP，输出率 = 原生率
+    var isCurrentPCM: Bool { currentInfo?.isPCM ?? false }
 
     /// PCM 输出采样率（44.1k 家族的整数倍）
     func pcmOutputRate(for info: DSDInfo) -> Double {
@@ -588,9 +600,11 @@ final class PlayerModel: ObservableObject {
         let dsfType = UTType(filenameExtension: "dsf") ?? .data
         let dffType = UTType(filenameExtension: "dff") ?? .data
         let isoType = UTType(filenameExtension: "iso") ?? .data
-        panel.allowedContentTypes = [dsfType, dffType, isoType]
+        let wavType = UTType(filenameExtension: "wav") ?? .data
+        let flacType = UTType(filenameExtension: "flac") ?? .data
+        panel.allowedContentTypes = [dsfType, dffType, isoType, wavType, flacType]
         panel.allowsMultipleSelection = true
-        panel.message = "Choose DSD audio files (.dsf / .dff) or SACD ISO — multiple selection allowed"
+        panel.message = "Choose audio files (.dsf / .dff / .wav / .flac) or SACD ISO — multiple selection allowed"
         guard panel.runModal() == .OK else { return }
         add(urls: panel.urls)
     }
@@ -604,12 +618,14 @@ final class PlayerModel: ObservableObject {
                 if let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) {
                     for case let f as URL in enumerator {
                         let ext = f.pathExtension.lowercased()
-                        if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(f) }
+                        if ext == "dsf" || ext == "dff" || ext == "iso"
+                            || ext == "wav" || ext == "flac" { files.append(f) }
                     }
                 }
             } else {
                 let ext = url.pathExtension.lowercased()
-                if ext == "dsf" || ext == "dff" || ext == "iso" { files.append(url) }
+                if ext == "dsf" || ext == "dff" || ext == "iso"
+                    || ext == "wav" || ext == "flac" { files.append(url) }
             }
         }
         // 按路径自然排序，保证专辑曲序（01、02…）
@@ -638,8 +654,13 @@ final class PlayerModel: ObservableObject {
             }
             if playlist.contains(where: { $0.url == url }) { continue }
             do {
-                let src = try DSDFile.open(url)
-                added.append(PlaylistItem(url: url, info: src.info))
+                if PCMFile.isSupported(url) {
+                    let src = try PCMFile.open(url)
+                    added.append(PlaylistItem(url: url, info: src.info))
+                } else {
+                    let src = try DSDFile.open(url)
+                    added.append(PlaylistItem(url: url, info: src.info))
+                }
             } catch {
                 failures.append(url.lastPathComponent)
             }
@@ -1407,9 +1428,10 @@ struct ContentView: View {
                 }
             }
             // 输出模式开关：面板级居中（叠层实现，不受左右内容影响）
+            // PCM 曲目（WAV/FLAC）无 DSD 数据可包，强制 PCM 输出并禁用 DoP 段
             ModePicker(mode: Binding(
                 get: { model.outputMode },
-                set: { model.setOutputMode($0) }), theme: theme)
+                set: { model.setOutputMode($0) }), theme: theme, dopDisabled: model.isCurrentPCM)
             .help("DoP: bit-perfect to DoP-capable DACs; PCM: convert to hi-res PCM, works on any device")
             .holeFreeZone()
         }
@@ -1438,12 +1460,21 @@ struct ContentView: View {
                     if let info = model.currentInfo {
                         // 信号链：源规格 → 输出方式与载波率（窄条排版，字号保持 caption）
                         HStack(spacing: 4) {
-                            Text("DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
-                                .foregroundStyle(.secondary)
+                            if info.isPCM {
+                                Text("\(info.formatName) · \(info.pcmRateText) · \(info.bitDepth)bit · \(channelLabel(info.channelCount))")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("DSD\(info.dsdMultiple) · \(String(format: "%.1f", Double(info.dsdSampleRate) / 1e6))MHz · \(channelLabel(info.channelCount))")
+                                    .foregroundStyle(.secondary)
+                            }
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(.tertiary)
-                            if model.outputMode == .dop {
+                            if info.isPCM {
+                                // PCM 文件：直通输出，无 DoP/采样率转换
+                                Text("PCM \(info.pcmRateText)")
+                                    .foregroundStyle(theme.accent)
+                            } else if model.outputMode == .dop {
                                 Text("DoP \(Int(info.dopCarrierRate / 1000))kHz")
                                     .foregroundStyle(theme.accent)
                             } else {
@@ -1489,14 +1520,14 @@ struct ContentView: View {
                                     .font(.caption2.weight(.semibold))
                                     .tracking(1.2)
                             }
-                            .opacity(model.outputMode == .dop && model.state == .playing ? 1 : 0.25)
+                            .opacity(model.outputMode == .dop && !model.isCurrentPCM && model.state == .playing ? 1 : 0.25)
                             .foregroundStyle(theme.accent)
                         }
                         .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
                         .crtGlowText(theme)
                         .holeFreeZone()
                     } else {
-                        Text("Add .dsf / .dff files to start playing")
+                        Text("Add .dsf / .dff / .wav / .flac files to start playing")
                             .font(.caption).foregroundStyle(.secondary)
                             .holeFreeZone()
                     }
@@ -1711,7 +1742,7 @@ struct ContentView: View {
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(isSelected ? onAccent : (isCurrent ? theme.accent : .primary))
             Spacer()
-            badge("DSD\(item.info.dsdMultiple)", small: true, onAccent: isSelected)
+            badge(item.info.badgeText, small: true, onAccent: isSelected)
             Text(formatTime(item.info.durationSeconds))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(isSelected ? onAccent.opacity(0.7) : .secondary)
@@ -2012,6 +2043,8 @@ struct ColorPanelView: View {
 struct ModePicker: View {
     @Binding var mode: OutputMode
     let theme: Theme
+    /// PCM 曲目播放中：DoP 不可用，显示强制为 PCM
+    var dopDisabled: Bool = false
     @State private var hovering: OutputMode?
 
     var body: some View {
@@ -2019,6 +2052,7 @@ struct ModePicker: View {
             segment("DoP", .dop)
             segment("PCM", .pcm)
         }
+        .disabled(dopDisabled)
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 8)
@@ -2032,7 +2066,7 @@ struct ModePicker: View {
     }
 
     private func segment(_ label: String, _ value: OutputMode) -> some View {
-        let selected = mode == value
+        let selected = (dopDisabled ? OutputMode.pcm : mode) == value
         return Button { mode = value } label: {
             Text(label)
                 .font(.callout.weight(selected ? .semibold : .regular))
