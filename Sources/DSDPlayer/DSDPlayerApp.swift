@@ -1288,12 +1288,15 @@ struct ContentView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
+                // 无封面：皮肤高亮色 + 波形图标占位
                 ZStack {
-                    Color(hue: coverHue, saturation: 0.32,
-                          brightness: theme.isDark ? 0.38 : 0.82)
-                    Text(coverInitial)
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.92))
+                    LinearGradient(colors: [theme.accent.opacity(theme.isDark ? 0.22 : 0.16),
+                                            theme.accent.opacity(theme.isDark ? 0.10 : 0.07)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: "waveform")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundStyle(theme.accent)
+                        .crtGlowText(theme)
                 }
             }
         }
@@ -1322,20 +1325,6 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(theme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.12), lineWidth: 1))
         .holeFreeZone()
-    }
-
-    /// 占位首字符：优先首个汉字，其次字母，最后数字，无则 D
-    private var coverInitial: String {
-        let t = model.currentItem?.title ?? ""
-        for ch in t where ("一"..."鿿").contains(ch) { return String(ch) }
-        for ch in t where ch.isLetter { return String(ch).uppercased() }
-        for ch in t where ch.isNumber { return String(ch) }
-        return "D"
-    }
-
-    /// 占位色相：按歌名哈希稳定取色，同一专辑恒定
-    private var coverHue: Double {
-        Double(abs((model.currentItem?.title ?? "").hashValue % 360)) / 360.0
     }
 
     // 顶栏: 标题 + 输出模式 + 设备 + 皮肤
