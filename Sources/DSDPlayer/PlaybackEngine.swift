@@ -351,7 +351,9 @@ final class PlaybackEngine: @unchecked Sendable {
             AudioDeviceManager.restoreVolume(deviceID)   // 恢复 DoP 强制 1.0 前的音量
             deviceID = 0
         }
-        restoreMatchedRate()   // PCM 匹配模式恢复原设备速率
+        // 注意：此处不做 restoreMatchedRate——stop 只出现在 load（随后必跟 play）与
+        // 真实停止路径，而 play 会决定设备终态；恢复插进来会造成一次多余的格式往返
+        // （实测 DX5 II：PCM↔DoP 往返切换时 restore+configure 双重转换卡 7.7s 且 err=35）
         ring.clear()
         if source != nil { state = .stopped }
     }
