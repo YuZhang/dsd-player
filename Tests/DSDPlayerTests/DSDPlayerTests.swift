@@ -400,7 +400,7 @@ final class DSDPlayerTests: XCTestCase {
     func testSavedStateRoundTrip() throws {        let original = SavedState(paths: ["/tmp/a.dsf"], currentIndex: 2,
                                   playMode: 3, outputMode: 1, skin: 1, showPlaylist: false,
                                   pcmRateBoost: 1,
-                                  customAccent: "#FF8800", customBg: "#121212", customBgOpacity: 0.6)
+                                  customAccent: "#FF8800", customBg: "#121212", customBgOpacity: 0.6, matchDeviceRate: nil)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(SavedState.self, from: data)
         XCTAssertEqual(decoded, original)

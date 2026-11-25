@@ -16,6 +16,7 @@ struct SavedState: Codable, Equatable {
     let customAccent: String?   // Dark 皮肤自定义强调色（hex），nil = 默认
     let customBg: String?       // Dark 皮肤自定义背景色（hex）
     let customBgOpacity: Double?   // 背景透明度 0...1，nil = 不透明
+    let matchDeviceRate: Bool?     // PCM 模式匹配设备采样率，nil = 关闭
 }
 
 // MARK: - 设计令牌（单一事实来源，详见 design.md）
@@ -117,6 +118,10 @@ final class PlayerModel: ObservableObject {
     @Published var outputMode: OutputMode = .dop
     /// PCM 输出采样率提升档：0 = DSD率/32，1 = ×2，2 = ×4
     @Published var pcmRateBoost = 0 {
+        didSet { persist() }
+    }
+    /// PCM 模式匹配设备采样率（设备支持时避免 HAL 重采样）
+    @Published var matchDeviceRate = false {
         didSet { persist() }
     }
     @Published var skin: Skin = .dark {
@@ -252,7 +257,8 @@ final class PlayerModel: ObservableObject {
                                pcmRateBoost: pcmRateBoost,
                                customAccent: customAccentHex,
                                customBg: customBgHex,
-                               customBgOpacity: customBgOpacity)
+                               customBgOpacity: customBgOpacity,
+                               matchDeviceRate: matchDeviceRate)
         UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: persistKey)
     }
 
@@ -271,6 +277,8 @@ final class PlayerModel: ObservableObject {
         engine.outputMode = outputMode
         pcmRateBoost = saved.pcmRateBoost ?? 0
         engine.pcmRateBoost = pcmRateBoost
+        matchDeviceRate = saved.matchDeviceRate ?? false
+        engine.matchDeviceRate = matchDeviceRate
         customAccentHex = saved.customAccent
         customBgHex = saved.customBg
         customBgOpacity = saved.customBgOpacity
@@ -540,6 +548,12 @@ final class PlayerModel: ObservableObject {
     func setPcmRateBoost(_ boost: Int) {
         pcmRateBoost = max(0, min(2, boost))
         rebuildOutputChain()
+    }
+
+    /// 切换 PCM 匹配设备采样率：立即对播放中的引擎生效
+    func setMatchDeviceRate(_ match: Bool) {
+        matchDeviceRate = match   // didSet 持久化
+        engineQueue.async { self.engine.updateMatchDeviceRate(match) }
     }
 
     func setOutputMode(_ mode: OutputMode) {
@@ -1874,6 +1888,11 @@ struct ContentView: View {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        let matchItem = ClosureMenuItem(title: "Match Device Sample Rate (PCM)") {
+            model.setMatchDeviceRate(!model.matchDeviceRate)
+        }
+        matchItem.state = model.matchDeviceRate ? .on : .off
+        menu.addItem(matchItem)
         menu.addItem(ClosureMenuItem(title: "Refresh Devices") { model.refreshDevices() })
         guard let window = NSApp.keyWindow ?? NSApp.windows.first else { return }
         // root 坐标为窗口左上角原点的 SwiftUI 坐标；窗口 frame 为屏幕左下原点，直接换算

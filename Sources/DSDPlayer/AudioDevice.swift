@@ -298,6 +298,35 @@ enum AudioDeviceManager {
         return streams.first
     }
 
+    // MARK: 名义采样率查询 / 设置（PCM 匹配模式）
+
+    static func nominalRate(_ device: AudioDeviceID) -> Double? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var rate = Float64(0)
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate) == noErr else { return nil }
+        return rate
+    }
+
+    @discardableResult
+    static func setNominalRate(_ device: AudioDeviceID, rate: Double) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var v = Float64(rate)
+        return AudioObjectSetPropertyData(device, &addr, 0, nil,
+                                          UInt32(MemoryLayout<Float64>.size), &v) == noErr
+    }
+
+    /// 设备是否支持指定名义采样率（查询实时属性，比设备列表的启发式并集更可靠）
+    static func supportsNominalRate(_ device: AudioDeviceID, rate: Double) -> Bool {
+        availableRates(device).contains(rate)
+    }
+
     // MARK: Hog Mode（独占设备，防止其他进程改动格式）
 
     static func acquireHogMode(_ device: AudioDeviceID) {

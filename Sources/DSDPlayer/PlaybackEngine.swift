@@ -42,6 +42,48 @@ final class PlaybackEngine: @unchecked Sendable {
     var outputMode: OutputMode = .dop
     /// PCM 输出采样率提升档：0 = DSD率/32（88.2k@DSD64），1 = ×2，2 = ×4
     var pcmRateBoost = 0
+    /// PCM 模式匹配设备采样率：播放时把设备名义率设为源码输出率（需设备支持），
+    /// 避免 HAL 重采样；暂停/停止/换设备时恢复原速率。默认关闭。
+    var matchDeviceRate = false
+
+    // PCM 匹配模式保存的原设备速率（暂停/停止时恢复）
+    private var savedRateDevice = AudioDeviceID(0)
+    private var savedRateValue: Double?
+
+
+    /// 应用匹配速率：设备支持且当前不一致时，保存原速率并切换
+    private func applyMatchedRate(device: AudioDeviceID, rate: Double) {
+        guard device != 0 else { return }
+        // 换设备先还原旧设备
+        if savedRateDevice != 0, savedRateDevice != device { restoreMatchedRate() }
+        guard AudioDeviceManager.supportsNominalRate(device, rate: rate) else { return }
+        let cur = AudioDeviceManager.nominalRate(device)
+        guard cur != rate else { return }
+        if savedRateDevice == 0 {
+            savedRateValue = cur
+            savedRateDevice = device
+        }
+        AudioDeviceManager.setNominalRate(device, rate: rate)
+    }
+
+    /// 恢复进入匹配前保存的设备速率
+    private func restoreMatchedRate() {
+        guard savedRateDevice != 0 else { return }
+        let device = savedRateDevice, value = savedRateValue
+        savedRateDevice = 0
+        savedRateValue = nil
+        if let value { AudioDeviceManager.setNominalRate(device, rate: value) }
+    }
+
+    /// 播放中切换匹配开关：立即应用或恢复（引擎队列调用）
+    func updateMatchDeviceRate(_ match: Bool) {
+        matchDeviceRate = match
+        if match, state == .playing, let src = source, effectiveMode == .pcm {
+            applyMatchedRate(device: deviceID, rate: Double(outputRate(for: src)))
+        } else {
+            restoreMatchedRate()
+        }
+    }
 
     /// 实际生效的输出模式：PCM 源（WAV/FLAC）只能走 PCM 通路，DoP 开关对它们无效
     private var effectiveMode: OutputMode {
@@ -159,6 +201,8 @@ final class PlaybackEngine: @unchecked Sendable {
                 AudioDeviceManager.acquireHogMode(device)
                 try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
                                                        bitPerfect: true)
+            } else if matchDeviceRate {
+                applyMatchedRate(device: device, rate: Double(outputRate(for: src)))
             }
             deviceID = device
             if let au = audioUnit { AudioOutputUnitStart(au) }
@@ -173,6 +217,9 @@ final class PlaybackEngine: @unchecked Sendable {
             AudioDeviceManager.acquireHogMode(device)
             try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
                                                    bitPerfect: true)
+        } else if matchDeviceRate {
+            // PCM 匹配模式：设备支持时切换名义采样率，避免 HAL 重采样
+            applyMatchedRate(device: device, rate: carrier)
         }
         // PCM 模式：不动设备格式（蓝牙等设备不能承受高速率），HAL 自动重采样
         deviceID = device
@@ -215,6 +262,7 @@ final class PlaybackEngine: @unchecked Sendable {
             AudioDeviceManager.releaseHogMode(deviceID)
             AudioDeviceManager.restoreVolume(deviceID)   // 恢复 DoP 强制 1.0 前的音量
         }
+        restoreMatchedRate()   // PCM 匹配模式恢复原设备速率
         state = .paused
     }
 
@@ -275,6 +323,7 @@ final class PlaybackEngine: @unchecked Sendable {
             AudioDeviceManager.restoreVolume(deviceID)   // 恢复 DoP 强制 1.0 前的音量
             deviceID = 0
         }
+        restoreMatchedRate()   // PCM 匹配模式恢复原设备速率
         ring.clear()
         if source != nil { state = .stopped }
     }

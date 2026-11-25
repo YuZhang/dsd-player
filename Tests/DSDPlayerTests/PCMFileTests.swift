@@ -201,3 +201,20 @@ final class PCMFileTests: XCTestCase {
         XCTAssertEqual(data, Data(png))
     }
 }
+
+// MARK: - 设备名义采样率（PCM 匹配模式）
+
+extension PCMFileTests {
+    /// 默认输出设备的名义采样率可读且为正；同值设置幂等成功
+    func testNominalRateReadWrite() throws {
+        guard let dev = AudioDeviceManager.defaultOutputDevice() else { return }
+        let rate = AudioDeviceManager.nominalRate(dev)
+        XCTAssertNotNil(rate)
+        if let rate {
+            XCTAssertGreaterThan(rate, 0)
+            // 同值写回：不影响系统状态，验证设置通路可用
+            XCTAssertTrue(AudioDeviceManager.setNominalRate(dev, rate: rate))
+            XCTAssertEqual(AudioDeviceManager.nominalRate(dev) ?? 0, rate, accuracy: 0.5)
+        }
+    }
+}
