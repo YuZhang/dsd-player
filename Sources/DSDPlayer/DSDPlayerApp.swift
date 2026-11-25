@@ -1497,19 +1497,26 @@ struct ContentView: View {
                                 .fixedSize()
                                 .help("PCM output sample rate (click to change)")
                             }
-                            // Bit-Perfect 标识：仪器微标签 + 呼吸灯（DoP 播放时以 1.6s 周期呼吸）
+                            // Bit-Perfect 标识：仪器微标签 + 呼吸灯
+                            // 仅 DoP 播放中以 15fps 呼吸，其余状态画静态点——
+                            // TimelineView 空转会让整个窗口每帧重渲染（空闲 CPU 20%+）
+                            let breathing = model.outputMode == .dop && !model.isCurrentPCM && model.state == .playing
                             HStack(spacing: 4) {
-                                TimelineView(.periodic(from: .now, by: 1.0 / 20)) { context in
-                                    let t = context.date.timeIntervalSince1970
-                                    let pulse = 0.5 + 0.5 * sin(2 * .pi * t / 1.6)
+                                if breathing {
+                                    TimelineView(.periodic(from: .now, by: 1.0 / 15)) { context in
+                                        let t = context.date.timeIntervalSince1970
+                                        let pulse = 0.5 + 0.5 * sin(2 * .pi * t / 1.6)
+                                        Circle().fill(theme.accent).frame(width: 4, height: 4)
+                                            .opacity(0.45 + 0.55 * pulse)
+                                    }
+                                } else {
                                     Circle().fill(theme.accent).frame(width: 4, height: 4)
-                                        .opacity(0.45 + 0.55 * pulse)
                                 }
                                 Text("BIT-PERFECT")
                                     .font(.caption2.weight(.semibold))
                                     .tracking(1.2)
                             }
-                            .opacity(model.outputMode == .dop && !model.isCurrentPCM && model.state == .playing ? 1 : 0.25)
+                            .opacity(breathing ? 1 : 0.25)
                             .foregroundStyle(theme.accent)
                         }
                         .font(theme.proLook ? .caption.monospaced() : .caption.monospacedDigit())   // 专业仪器读数用等宽字体
@@ -1627,8 +1634,8 @@ struct ContentView: View {
 
             if model.playlist.isEmpty {
                 VStack(spacing: 10) {
-                    // 动态波形：空列表时的生命感（仅空列表时运行）
-                    TimelineView(.periodic(from: .now, by: 1.0 / 20)) { context in
+                    // 动态波形：空列表时的生命感（10fps 足够，避免 TimelineView 空转拉高空闲 CPU）
+                    TimelineView(.periodic(from: .now, by: 1.0 / 10)) { context in
                         let t = context.date.timeIntervalSince1970
                         HStack(spacing: 4) {
                             ForEach(0..<5, id: \.self) { i in

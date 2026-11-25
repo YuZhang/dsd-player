@@ -88,6 +88,10 @@ GitHub Release 注意：本机直连 api.github.com 会超时，`gh` 命令需�
 已知 UI 坑（改前自查）：
 - SwiftUI `Menu` + `.borderlessButton` 会忽略 label 的 frame 并把内容居中——
   设备选择控件因此改用了普通 Button + 手动 NSMenu（`showDeviceMenu`），别改回去
+- macOS 上 `TimelineView(.periodic)` 每次 tick 会让整个 NSHostingView 重渲染：
+  永久运行的装饰动画（如 BIT-PERFECT 呼吸灯）会把空闲 CPU 拉到 20%+。
+  必须门控——仅活跃状态（如 DoP 播放中）才启动 TimelineView，否则画静态帧
+  （2026-11-25 实修：空闲 15-25% → 0.2%）
 - 窗口 `isOpaque = false` + `backgroundColor = .clear`：半透明填充会叠加混合，
   半透明模式下整窗只能由根部背景绘制一次（`isTranslucent` 逻辑）
 - 菜单弹出是独立窗口：窗口截图拍不到，用全屏截图 + CGWindowList 定位
