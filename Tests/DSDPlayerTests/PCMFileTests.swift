@@ -218,3 +218,36 @@ extension PCMFileTests {
         }
     }
 }
+
+// MARK: - 双设备播放链切换（模拟 selectDevice 的 rebuild 路径）
+
+extension PCMFileTests {
+    /// 模拟用户切换输出设备：load + play 在新设备上重建（不含 UI 层）
+    /// 验证两个真实设备间来回切换都能成功启动（用户场景：DX5 II ↔ 内置喇叭）
+    func testPlaySwitchBetweenTwoDevices() throws {
+        let devices = AudioDeviceManager.outputDevices()
+        guard devices.count >= 2 else { return }   // 单设备环境跳过
+        let url = try makeWAV(name: "switch.wav", rate: 44100, bits: 16,
+                              channels: 2, seconds: 60)
+        let engine = PlaybackEngine()
+        engine.outputMode = .pcm
+        engine.matchDeviceRate = true
+        // 设备 A 播放
+        try engine.load(source: AudioSource.pcm(PCMFile.open(url)))
+        try engine.play(device: devices[0].id)
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(engine.state, .playing, "device0 start failed")
+        // 切到设备 B（rebuild = load + play）
+        try engine.load(source: AudioSource.pcm(PCMFile.open(url)))
+        try engine.play(device: devices[1].id)
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(engine.state, .playing, "device1 start failed")
+        // 切回设备 A
+        try engine.load(source: AudioSource.pcm(PCMFile.open(url)))
+        try engine.play(device: devices[0].id)
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertEqual(engine.state, .playing, "device0 restart failed")
+        engine.stop()
+        XCTAssertEqual(engine.state, .stopped)
+    }
+}
