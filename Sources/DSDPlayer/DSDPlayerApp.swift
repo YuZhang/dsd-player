@@ -550,6 +550,16 @@ final class PlayerModel: ObservableObject {
         Double(info.dsdSampleRate) / 32 * Double(1 << max(0, min(2, pcmRateBoost)))
     }
 
+    /// 用户选择输出设备：播放/暂停中立即在新设备上重建输出链（原位置续播）；
+    /// 停止状态下仅记录选中，下次播放生效
+    func selectDevice(_ dev: OutputDevice) {
+        guard dev != selectedDevice else { return }
+        selectedDevice = dev
+        if state == .playing || state == .paused {
+            rebuildOutputChain()
+        }
+    }
+
     /// 切换 PCM 输出采样率：播放中保持位置续播
     func setPcmRateBoost(_ boost: Int) {
         pcmRateBoost = max(0, min(2, boost))
@@ -1889,7 +1899,7 @@ struct ContentView: View {
         let menu = NSMenu()
         for dev in model.devices {
             let item = ClosureMenuItem(title: dev.name + (dev.isUSB ? " ⚡" : "")) {
-                model.selectedDevice = dev
+                model.selectDevice(dev)
             }
             if dev == model.selectedDevice { item.state = .on }
             menu.addItem(item)

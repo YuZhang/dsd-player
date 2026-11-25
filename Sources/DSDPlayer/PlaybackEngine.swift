@@ -204,7 +204,21 @@ final class PlaybackEngine: @unchecked Sendable {
     func play(device: AudioDeviceID) throws {
         guard let src = source else { return }
         let eff = effectiveMode
-        if state == .paused {
+        if state == .paused, device != deviceID {
+            // 暂停期间切换了输出设备：旧 AudioUnit 仍绑定旧设备，丢弃并走完整配置
+            if let au = audioUnit {
+                AudioOutputUnitStop(au)
+                AudioUnitUninitialize(au)
+                AudioComponentInstanceDispose(au)
+                audioUnit = nil
+            }
+            if deviceID != 0 {
+                AudioDeviceManager.releaseHogMode(deviceID)
+                AudioDeviceManager.restoreVolume(deviceID)
+                deviceID = 0
+            }
+        }
+        if state == .paused, device == deviceID {
             // 恢复播放：重新独占并配置设备（暂停期间其他应用可能改过格式）
             if eff == .dop {
                 let carrier = Double(outputRate(for: src))
