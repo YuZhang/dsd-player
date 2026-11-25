@@ -46,12 +46,14 @@ final class PlaybackEngine: @unchecked Sendable {
     /// 避免 HAL 重采样；暂停/停止/换设备时恢复原速率。默认关闭。
     var matchDeviceRate = false
 
-    // PCM 匹配模式保存的原设备速率（暂停/停止时恢复）
+    // PCM 匹配模式保存的原设备速率与流格式（暂停/停止时恢复）
     private var savedRateDevice = AudioDeviceID(0)
     private var savedRateValue: Double?
+    private var savedStreamFormat: AudioStreamBasicDescription?
 
-
-    /// 应用匹配速率：设备支持且当前不一致时，保存原速率并切换
+    /// 应用匹配速率：设备支持且当前不一致时，保存原速率/流格式并切换。
+    /// 用 configureDevice(bitPerfect:false) 同时设置流格式与名义率——DoP 切换后
+    /// 设备流格式可能仍钉在上次载波率（如 24/176.4k），只改名义率会留下不一致状态
     private func applyMatchedRate(device: AudioDeviceID, rate: Double) {
         guard device != 0 else { return }
         // 换设备先还原旧设备
@@ -61,17 +63,25 @@ final class PlaybackEngine: @unchecked Sendable {
         guard cur != rate else { return }
         if savedRateDevice == 0 {
             savedRateValue = cur
+            savedStreamFormat = AudioDeviceManager.outputStreamFormat(device)
             savedRateDevice = device
         }
-        AudioDeviceManager.setNominalRate(device, rate: rate)
+        do {
+            try AudioDeviceManager.configureDevice(device, carrierRate: rate, bitPerfect: false)
+        } catch {
+            // 设备拒绝流格式设置（蓝牙等）：退回仅设名义率，交给 HAL 重采样
+            AudioDeviceManager.setNominalRate(device, rate: rate)
+        }
     }
 
-    /// 恢复进入匹配前保存的设备速率
+    /// 恢复进入匹配前保存的设备速率与流格式（先格式后速率）
     private func restoreMatchedRate() {
         guard savedRateDevice != 0 else { return }
-        let device = savedRateDevice, value = savedRateValue
+        let device = savedRateDevice, value = savedRateValue, format = savedStreamFormat
         savedRateDevice = 0
         savedRateValue = nil
+        savedStreamFormat = nil
+        if let format { AudioDeviceManager.setOutputStreamFormat(device, format) }
         if let value { AudioDeviceManager.setNominalRate(device, rate: value) }
     }
 
@@ -249,7 +259,25 @@ final class PlaybackEngine: @unchecked Sendable {
             Thread.sleep(forTimeInterval: 0.005)
         }
 
-        let err = AudioOutputUnitStart(audioUnit!)
+        var err = AudioOutputUnitStart(audioUnit!)
+        if err != noErr {
+            // USB DAC 切换格式族后首次启动常因设备未就绪而失败（实测 DX5 II：
+            // DoP 配置后首启 err=35）：拆掉重建输出链并重试一次
+            if let au = audioUnit {
+                AudioOutputUnitStop(au)
+                AudioUnitUninitialize(au)
+                AudioComponentInstanceDispose(au)
+                audioUnit = nil
+            }
+            Thread.sleep(forTimeInterval: 0.5)   // 给设备留格式切换时间
+            if eff == .dop {
+                AudioDeviceManager.acquireHogMode(device)
+                try AudioDeviceManager.configureDevice(device, carrierRate: carrier,
+                                                       bitPerfect: true)
+            }
+            try setupAudioUnit(device: device, carrier: carrier, channels: src.info.channelCount)
+            err = AudioOutputUnitStart(audioUnit!)
+        }
         guard err == noErr else { throw DSDError.outputDevice("Failed to start audio output (\(err))") }
         state = .playing
     }

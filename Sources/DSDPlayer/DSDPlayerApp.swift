@@ -904,7 +904,8 @@ final class PlayerModel: ObservableObject {
                 catch { DispatchQueue.main.async { self.statusMessage = error.localizedDescription } }
             }
         case .idle:
-            if !playlist.isEmpty { play(at: 0) }
+            // 与 .stopped 一致：优先当前选中项，没有选中才播第一首
+            if let idx = currentIndex ?? (playlist.isEmpty ? nil : 0) { play(at: idx) }
         }
     }
 

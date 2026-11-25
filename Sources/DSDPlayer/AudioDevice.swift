@@ -327,6 +327,30 @@ enum AudioDeviceManager {
         availableRates(device).contains(rate)
     }
 
+    /// 当前输出流格式（虚拟格式），供 PCM 匹配模式保存/恢复
+    static func outputStreamFormat(_ device: AudioDeviceID) -> AudioStreamBasicDescription? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamFormat,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: 0)
+        var fmt = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &fmt) == noErr else { return nil }
+        return fmt
+    }
+
+    @discardableResult
+    static func setOutputStreamFormat(_ device: AudioDeviceID, _ format: AudioStreamBasicDescription) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamFormat,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: 0)
+        var fmt = format
+        return AudioObjectSetPropertyData(device, &addr, 0, nil,
+                                          UInt32(MemoryLayout<AudioStreamBasicDescription>.size),
+                                          &fmt) == noErr
+    }
+
     // MARK: Hog Mode（独占设备，防止其他进程改动格式）
 
     static func acquireHogMode(_ device: AudioDeviceID) {
@@ -338,10 +362,17 @@ enum AudioDeviceManager {
         var owner = pid_t(-1)
         var size = UInt32(MemoryLayout<pid_t>.size)
         guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &owner) == noErr else { return }
-        if owner == -1 {
+        // 持有者已死亡（崩溃/强杀残留）时强取：否则配置设备会卡数秒并以 err=35 失败
+        if owner == -1 || !pidAlive(owner) {
             var me = getpid()
             AudioObjectSetPropertyData(device, &addr, 0, nil, UInt32(MemoryLayout<pid_t>.size), &me)
         }
+    }
+
+    /// 进程是否存活（kill(pid, 0)：0=存活，EPERM=存活但非本用户，ESRCH=已死）
+    private static func pidAlive(_ pid: pid_t) -> Bool {
+        if pid <= 0 { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
     }
 
     static func releaseHogMode(_ device: AudioDeviceID) {
