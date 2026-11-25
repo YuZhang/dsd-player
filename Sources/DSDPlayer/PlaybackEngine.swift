@@ -477,7 +477,11 @@ final class PlaybackEngine: @unchecked Sendable {
             let freeFrames = ring.availableToWrite / ch
             guard freeFrames >= chunkFrames else {
                 feederLock.unlock()
-                Thread.sleep(forTimeInterval: 0.002)
+                // 按剩余空间比例休眠（最多消耗剩余空间的一半），避免 2ms 轮询空转：
+                // 环形缓冲容量是秒级的，播放中无需高频醒来检查
+                let carrier = Double(max(1, carrierRate.load(ordering: .relaxed)))
+                let sleepSec = min(0.05, max(0.002, Double(freeFrames) / carrier * 0.5))
+                Thread.sleep(forTimeInterval: sleepSec)
                 continue
             }
 
