@@ -266,10 +266,6 @@ final class PlayerModel: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: persistKey),
               let saved = try? JSONDecoder().decode(SavedState.self, from: data) else { return }
         isRestoring = true
-        defer {
-            isRestoring = false
-            persist()   // 写回规范化后的状态（已移除不存在的文件）
-        }
         playMode = PlayMode(rawValue: saved.playMode) ?? .sequential
         skin = Skin(rawValue: saved.skin ?? 0) ?? .dark
         showPlaylist = saved.showPlaylist ?? true
@@ -282,44 +278,54 @@ final class PlayerModel: ObservableObject {
         customAccentHex = saved.customAccent
         customBgHex = saved.customBg
         customBgOpacity = saved.customBgOpacity
-        var items: [PlaylistItem] = []
-        var missing = 0
-        for path in saved.paths {
-            // ISO 曲目条目："iso路径#track=N"
-            if let range = path.range(of: "#track="), let idx = Int(path[range.upperBound...]) {
-                let isoPath = String(path[..<range.lowerBound])
-                guard FileManager.default.fileExists(atPath: isoPath) else { missing += 1; continue }
-                do {
-                    let key = isoPath as NSString
-                    let iso: SacdISO
-                    if let cached = isoCache.object(forKey: key) { iso = cached }
-                    else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); isoCache.setObject(iso, forKey: key) }
-                    let t = iso.album.tracks[idx]
-                    let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
-                                       channelCount: iso.album.channelCount,
-                                       totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
-                    items.append(PlaylistItem(isoURL: URL(fileURLWithPath: isoPath), info: info,
-                                              trackIndex: idx,
-                                              title: t.title.isEmpty ? "Track \(t.index + 1)" : t.title))
-                } catch { missing += 1 }
-                continue
+        // 文件 I/O 放后台：open() 可能被 TCC 授权/文件提供程序阻塞，
+        // 放主线程会让窗口数十秒不显示（实测卡住整个启动）
+        let paths = saved.paths
+        let currentIndex = saved.currentIndex
+        DispatchQueue.global(qos: .userInitiated).async {
+            var items: [PlaylistItem] = []
+            var missing = 0
+            for path in paths {
+                // ISO 曲目条目："iso路径#track=N"
+                if let range = path.range(of: "#track="), let idx = Int(path[range.upperBound...]) {
+                    let isoPath = String(path[..<range.lowerBound])
+                    guard FileManager.default.fileExists(atPath: isoPath) else { missing += 1; continue }
+                    do {
+                        let key = isoPath as NSString
+                        let iso: SacdISO
+                        if let cached = self.isoCache.object(forKey: key) { iso = cached }
+                        else { iso = try SacdISO(url: URL(fileURLWithPath: isoPath)); self.isoCache.setObject(iso, forKey: key) }
+                        let t = iso.album.tracks[idx]
+                        let info = DSDInfo(formatName: "SACD", dsdSampleRate: 2_822_400,
+                                           channelCount: iso.album.channelCount,
+                                           totalSamplesPerChannel: UInt64(t.durationSeconds * 75 * 4704 * 8))
+                        items.append(PlaylistItem(isoURL: URL(fileURLWithPath: isoPath), info: info,
+                                                  trackIndex: idx,
+                                                  title: t.title.isEmpty ? "Track \(t.index + 1)" : t.title))
+                    } catch { missing += 1 }
+                    continue
+                }
+                let url = URL(fileURLWithPath: path)
+                guard FileManager.default.fileExists(atPath: path) else { missing += 1; continue }
+                let info: DSDInfo
+                if PCMFile.isSupported(url), let src = try? PCMFile.open(url) {
+                    info = src.info
+                } else if let src = try? DSDFile.open(url) {
+                    info = src.info
+                } else { missing += 1; continue }
+                items.append(PlaylistItem(url: url, info: info))
             }
-            let url = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: path) else { missing += 1; continue }
-            let info: DSDInfo
-            if PCMFile.isSupported(url), let src = try? PCMFile.open(url) {
-                info = src.info
-            } else if let src = try? DSDFile.open(url) {
-                info = src.info
-            } else { missing += 1; continue }
-            items.append(PlaylistItem(url: url, info: info))
-        }
-        playlist = items
-        if missing > 0 {
-            statusMessage = "\(missing) file(s) moved or deleted, not restored"
-        }
-        if let idx = saved.currentIndex, playlist.indices.contains(idx) {
-            select(at: idx)
+            DispatchQueue.main.async {
+                self.playlist = items
+                if missing > 0 {
+                    self.statusMessage = "\(missing) file(s) moved or deleted, not restored"
+                }
+                if let idx = currentIndex, items.indices.contains(idx) {
+                    self.select(at: idx)
+                }
+                self.isRestoring = false
+                self.persist()   // 写回规范化后的状态（已移除不存在的文件）
+            }
         }
     }
 
